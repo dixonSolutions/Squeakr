@@ -79,14 +79,20 @@ export class DiscordCall {
       adapterCreator: this.opts.adapterCreator,
       selfDeaf: false,
       selfMute: false,
+      debug: true,
     });
     this.connection = connection;
+    // End-to-end encryption (DAVE) is where calls go quiet without an error — keep its trail.
+    connection.on('debug', (message: string) => {
+      if (message.includes('[DAVE]')) log.debug({ message: message.slice(0, 300) }, 'voice encryption');
+    });
     try {
       await v.entersState(connection, v.VoiceConnectionStatus.Ready, 20_000);
     } catch (err) {
       connection.destroy();
       throw new Error(`Could not connect to the voice channel: ${err instanceof Error ? err.message : String(err)}`);
     }
+    await this.encryptionReady(connection);
     this.player = v.createAudioPlayer({ behaviors: { noSubscriber: v.NoSubscriberBehavior.Pause } });
     connection.subscribe(this.player);
     connection.receiver.speaking.on('start', (userId: string) => this.listen(userId));
@@ -100,6 +106,25 @@ export class DiscordCall {
     connection.on(v.VoiceConnectionStatus.Destroyed, () => void this.leave());
     this.call.start();
     log.info({ guild: this.opts.guildId, channel: this.opts.channelName }, 'discord call joined');
+  }
+
+  /**
+   * Voice calls are end-to-end encrypted (DAVE). The connection reports Ready
+   * before the MLS group is set up, and until it is the library sends audio
+   * unencrypted — which clients drop, so the join cue was never heard. Wait
+   * (briefly) for the session before anything is played.
+   */
+  private async encryptionReady(connection: VoiceConnection, timeoutMs = 5_000): Promise<void> {
+    type Dave = { protocolVersion?: number; session?: { ready?: boolean } };
+    const dave = (): Dave | undefined =>
+      (connection.state as { networking?: { state?: { dave?: Dave } } } | undefined)?.networking?.state?.dave;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const d = dave();
+      if (!d || d.protocolVersion === 0 || d.session?.ready) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    log.warn({ channel: this.opts.channelName }, 'end-to-end encryption still not ready — the first sounds may not be heard');
   }
 
   async leave(reason?: string): Promise<void> {

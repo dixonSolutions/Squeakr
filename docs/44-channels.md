@@ -187,7 +187,11 @@ In: images, video, recordings and documents attached to a `chat` message or
 sent in a stream are saved under `<data>/attachments/<day>/` and handed to the
 agent by path (`Attached image: /…/shot.png`) — every agent CLI can open a
 file by path, so nothing is per-CLI. Voice messages are transcribed into the
-turn instead. 25 MB per file (`src/channels/attachments.ts`).
+turn instead, and so are audio files (FLAC, MP3, M4A/AAC, WAV, Ogg, WebM —
+decoded by the optional `audio-decode`, no ffmpeg): what was typed, then
+`Recording 8.flac (transcribed): …`, and the file is still saved and referenced
+by path. A recording on its own is a turn, like a voice message, on every
+channel. 25 MB per file (`src/channels/attachments.ts`).
 
 Out: files the agent sends are posted as attachments wherever someone is
 listening, and to the message channel. Two tools publish them as an
@@ -327,8 +331,16 @@ agent speak() ─▶ synthesize(stream: true) (docs/30) ─▶ PCM chunks
     pause ends it; with VAD off, the end phrase does. The cancel phrase drops it.
   - wake words off — every utterance is a request (VAD off: the silence timer
     ends it).
-  The phone spots phrases with Vosk on the audio; a call matches them in the
-  server transcript, with the same normalisation.
+  The phone spots phrases with Vosk on the audio, and so does a call: the
+  bridge runs the same model, grammar and confidence threshold on each
+  speaker's audio (`src/channels/wakeSpotter.ts`, the optional native
+  `vosk-koffi`), so the listening cue plays while the start phrase is still
+  being said rather than after the pause and the transcript. The transcript
+  then only carries the request — its copy of the phrase is cut, even
+  misspelled. Without the native library or a prepared model, the phrase is
+  matched in the server transcript as before. For the request itself a small
+  model keeps calls snappy: `Systran/faster-whisper-base.en` transcribes about
+  3× faster than `small` on a CPU.
 - Discord sends **no packets while someone is silent**, so a pause cannot be
   heard; the member's receive stream ends after the VAD silence
   (`turnSubmit.silenceMs`; `stream.segmentSilenceMs` in stream input —

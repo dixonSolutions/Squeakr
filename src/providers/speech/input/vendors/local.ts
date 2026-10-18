@@ -44,6 +44,12 @@ export const localSpeechInput: SpeechInputVendor = {
       recommended: true,
     },
     {
+      id: 'Systran/faster-whisper-base.en',
+      label: 'faster-whisper base — English (~150 MB)',
+      note: 'About 3× faster than small on a CPU; the snappiest for calls, a little less accurate.',
+      languages: ['en'],
+    },
+    {
       id: 'Systran/faster-whisper-medium',
       label: 'faster-whisper medium (~1.5 GB)',
       note: 'Clearly better on technical terms; ~3× slower on CPU.',

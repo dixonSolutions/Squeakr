@@ -45,6 +45,7 @@ import type { SegmenterOptions } from '../voice/audioStream/segmenter.js';
 import { prepareAgentForChannels } from './prepare.js';
 import { cueStream, type CallCue } from './cues.js';
 import { CallTurns, type CallTurnSettings, type TurnVerdict } from './callTurns.js';
+import { loadSpotter, type PhraseSpotter, type SpotterFactory } from './wakeSpotter.js';
 import { deliverStreamTurn, type StreamTurnOutcome } from '../voice/streamTurns.js';
 
 const log = childLogger('channels:voice-call');
@@ -78,6 +79,8 @@ export interface VoiceCallDeps {
   prepare(): Promise<void>;
   /** Send one frame to the app; dropped when no app is connected. */
   mirror(frame: Record<string, unknown>): void;
+  /** Spots the start phrase in the audio as it is said (wakeSpotter.ts); null falls back to the transcript. */
+  spotter(): Promise<SpotterFactory | null>;
 }
 
 export interface VoiceCallOptions {
@@ -122,11 +125,16 @@ const defaultDeps: VoiceCallDeps = {
   mirror: (frame) => {
     if (isControlSocketOpen()) pushToPhone(frame);
   },
+  spotter: loadSpotter,
 };
 
 interface Speaker {
   pipe: AudioStreamPipe;
   name: string;
+  /** Listens for the start phrase while this speaker talks (wake words on, spotter available). */
+  spot: PhraseSpotter | null;
+  /** The spotter played the listening cue for the utterance being transcribed. */
+  spotted: boolean;
 }
 
 export class VoiceCall {
@@ -146,6 +154,7 @@ export class VoiceCall {
   private closing = false;
   private closed = false;
   private readonly abort = new AbortController();
+  private spotterFactory: SpotterFactory | null = null;
 
   constructor(private readonly opts: VoiceCallOptions) {
     this.deps = { ...defaultDeps, ...opts.deps };
@@ -216,6 +225,13 @@ export class VoiceCall {
         return false;
       },
     );
+    if (this.turns.wakeWords) {
+      void this.deps.spotter().then((factory) => {
+        if (!factory || this.closing) return;
+        this.spotterFactory = factory;
+        for (const [id, speaker] of this.speakers) speaker.spot ??= this.newSpotter(id);
+      });
+    }
     this.unregister = this.deps.registerVoiceSession((payload) => this.onBridgeEvent(payload), this.opts.name);
     this.presence = this.deps.registerPresence();
     recordTranscriptEvent(`${this.opts.name} started`);
@@ -274,12 +290,46 @@ export class VoiceCall {
   /** 16 kHz mono PCM16 from one participant. */
   pushAudio(speakerId: string, speakerName: string, pcm: Buffer): void {
     if (this.closing) return;
-    this.speakerFor(speakerId, speakerName).pipe.push(pcm);
+    const speaker = this.speakerFor(speakerId, speakerName);
+    speaker.spot?.push(pcm);
+    speaker.pipe.push(pcm);
   }
 
   /** The platform says this participant stopped talking — cut their segment now. */
   speakerPaused(speakerId: string): void {
-    this.speakers.get(speakerId)?.pipe.flush();
+    const speaker = this.speakers.get(speakerId);
+    if (!speaker) return;
+    speaker.pipe.flush();
+    speaker.spot?.reset();
+    log.debug({ call: this.opts.name, speakerId, ...speaker.pipe.getStats() }, 'call speaker paused');
+  }
+
+  private newSpotter(id: string): PhraseSpotter | null {
+    if (!this.spotterFactory) return null;
+    const wake = this.turns.settings.wakeWords;
+    try {
+      return this.spotterFactory({
+        phrase: wake.start,
+        threshold: wake.wakeConfidenceThreshold ?? 0.45,
+        onMatch: (heard) => this.onSpotted(id, heard),
+      });
+    } catch (err) {
+      log.warn({ err, call: this.opts.name }, 'wake-word spotter could not start for a speaker');
+      return null;
+    }
+  }
+
+  /** The start phrase, heard in the audio as it was said: the listening cue now, not after the transcript. */
+  private onSpotted(speakerId: string, heard: string): void {
+    const speaker = this.speakers.get(speakerId);
+    if (!speaker || this.closing) return;
+    log.debug({ call: this.opts.name, speaker: speaker.name, heard }, 'start phrase spotted');
+    speaker.spotted = true;
+    this.lastSpeaker = speaker;
+    this.turns.open();
+    if (this.playing || this.lines.length) this.interrupt();
+    this.mirror({ event: 'heard', speaker: speaker.name, text: heard, state: 'armed' });
+    this.cue('listening', true);
   }
 
   /** Cut the agent off: stop the line playing, drop the rest. */
@@ -295,7 +345,10 @@ export class VoiceCall {
     await Promise.all([...this.speakers.values()].map((s) => s.pipe.drain().catch(() => undefined)));
     this.closed = true;
     this.turns.dispose();
-    for (const s of this.speakers.values()) s.pipe.close();
+    for (const s of this.speakers.values()) {
+      s.pipe.close();
+      s.spot?.close();
+    }
     this.speakers.clear();
     this.interrupt();
     this.abort.abort();
@@ -311,6 +364,8 @@ export class VoiceCall {
     if (existing) return existing;
     const speaker: Speaker = {
       name,
+      spot: null,
+      spotted: false,
       pipe: new AudioStreamPipe({
         segmenter: { sampleRate: 16_000, ...this.deps.segmentSettings(), segmentSilenceMs: this.endOfSpeechMs },
         transcribe: async (pcm, signal) => {
@@ -318,6 +373,7 @@ export class VoiceCall {
           return this.deps.transcribe(pcm, signal);
         },
         onTranscript: (t) => this.onTranscript(id, t.text),
+        onEmpty: (info) => log.debug({ call: this.opts.name, speaker: name, ...info }, 'call segment transcribed to nothing'),
         onError: (err) => {
           log.warn({ err, call: this.opts.name, speaker: name }, 'call segment transcription failed');
           this.notice(`Could not transcribe ${name}: ${err.message}`);
@@ -325,13 +381,18 @@ export class VoiceCall {
       }),
     };
     this.speakers.set(id, speaker);
+    speaker.spot = this.newSpotter(id);
     return speaker;
   }
 
   private onTranscript(speakerId: string, heard: string): void {
+    log.debug({ call: this.opts.name, speakerId, heard }, 'call segment transcribed');
     const speaker = this.speakers.get(speakerId);
     if (!speaker || this.closed) return;
     this.lastSpeaker = speaker;
+    // The spotter already cued this utterance; the transcript only finishes it.
+    const cued = speaker.spotted;
+    speaker.spotted = false;
     const verdict: TurnVerdict = this.turns.feed(heard);
     switch (verdict.action) {
       case 'ignore':
@@ -341,7 +402,7 @@ export class VoiceCall {
       case 'armed':
         if (this.playing || this.lines.length) this.interrupt();
         this.mirror({ event: 'heard', speaker: speaker.name, text: heard, state: 'armed' });
-        this.cue('listening', true);
+        if (!cued) this.cue('listening', true);
         this.opts.onLine?.({ who: 'user', speaker: speaker.name, text: `${heard} 👂` });
         return;
       case 'buffered':
