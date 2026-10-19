@@ -144,6 +144,12 @@ Asset view (what the phone sees — host paths are never echoed back):
 `src/routes/media.test.ts` and `web/src/media-upload.test.ts`. The ffmpeg cases
 run when ffmpeg is on PATH and are skipped (saying so) when not.
 
+`scripts/live-media-pipe-test.mjs` (in CI) runs a real bridge with the stub
+agent: uploads and transcripts, `view_media` over MCP, attach before an agent
+exists, a turn with a picture spawning the agent, a follow-up whose picture
+arrives inline in `next_voice_turn`, and an attach while the agent is busy
+arriving on its next Squeakr result without becoming a turn.
+
 Verified end to end on 2026-10-20 against a scratch bridge with local Whisper
 (speaches) and Claude Code: a spoken clip uploaded as WAV, Chrome-style
 WebM/Opus, Safari-style M4A and inside an MP4 was transcribed word for word;
