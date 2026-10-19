@@ -2,8 +2,11 @@
  * Per-device browser TTS preferences — stored in localStorage on the PWA.
  *
  * Server defaults live in config.json `settings.voice.tts.webkit`.
- * This module merges server defaults with the profile for the current browser.
+ * This module merges server defaults with the profile for the current browser,
+ * then applies the device's speech speed and loudness (audio-prefs.ts, docs/49).
  */
+
+import { currentLoudness, currentSpeechSpeed } from './audio-prefs.js';
 
 export interface WebkitTtsDefaults {
   rate: number;
@@ -142,18 +145,33 @@ export function deleteBrowserTtsProfile(id: string): void {
   writeStore(readStore().filter((p) => p.id !== id));
 }
 
+/** speechSynthesis accepts 0.1–10; real engines stop changing well before that. */
+const MIN_UTTERANCE_RATE = 0.1;
+const MAX_UTTERANCE_RATE = 10;
+
+/**
+ * Profile + server defaults, scaled by the device's speed and loudness
+ * sliders. The speed multiplies the voice's own rate, so a voice tuned to
+ * 1.1 stays 10 % faster than its neighbours. Loudness contributes only its
+ * attenuation here: utterance volume cannot exceed 1, and the boost above
+ * the default is applied on the Web Audio output bus instead. The same
+ * `volume` becomes the TTS pile's base volume for server speech, so both
+ * engines get the same attenuation.
+ */
 export function resolveBrowserTtsOptions(
   serverDefaults: WebkitTtsDefaults,
   profileId = currentBrowserProfileId(),
 ): ResolvedBrowserTts {
   const profile = getBrowserTtsProfile(profileId);
   const opts = profile?.options ?? {};
+  const rate = (opts.rate ?? serverDefaults.rate) * currentSpeechSpeed();
+  const volume = (opts.volume ?? serverDefaults.volume) * currentLoudness().attenuation;
   return {
     voiceURI: opts.voiceURI,
     lang: opts.lang ?? serverDefaults.lang,
-    rate: opts.rate ?? serverDefaults.rate,
+    rate: Math.min(MAX_UTTERANCE_RATE, Math.max(MIN_UTTERANCE_RATE, rate)),
     pitch: opts.pitch ?? serverDefaults.pitch,
-    volume: opts.volume ?? serverDefaults.volume,
+    volume: Math.min(1, Math.max(0, volume)),
   };
 }
 

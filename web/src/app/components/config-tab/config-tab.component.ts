@@ -34,6 +34,13 @@ import { VoiceProvidersService } from '../../services/voice-providers.service';
 import { VoiceSessionService } from '../../services/voice-session.service';
 import { ConnectionTabComponent } from '../connection-tab/connection-tab.component';
 import { SpeechTabComponent } from '../speech-tab/speech-tab.component';
+import { AudioSettingsComponent } from '../audio-settings/audio-settings.component';
+import { LevelSliderComponent } from '../audio-settings/level-slider.component';
+import {
+  wakeSensitivityLabel,
+  wakeSensitivityToThreshold,
+  wakeThresholdToSensitivity,
+} from '../../../audio-prefs.js';
 import type {
   AdminProject,
   AuditEntry,
@@ -67,6 +74,7 @@ type SectionId =
   | 'connection'
   | 'voice'
   | 'speech'
+  | 'audio'
   | 'projects'
   | 'keys'
   | 'workflow'
@@ -116,7 +124,7 @@ const ALL_SECTIONS: ConfigSection[] = [
     keywords: [
       'wake', 'phrase', 'vad', 'silence', 'start', 'end', 'cancel', 'listen',
       'touch', 'mute', 'controls', 'turn', 'submit', 'activation', 'barge',
-      'input', 'mode', 'stream', 'pipe', 'segment',
+      'input', 'mode', 'stream', 'pipe', 'segment', 'sensitivity', 'confidence',
     ],
   },
   {
@@ -131,6 +139,18 @@ const ALL_SECTIONS: ConfigSection[] = [
       'openai', 'groq', 'deepgram', 'elevenlabs', 'gemini', 'openrouter', 'amazon',
       'local', 'self-hosted', 'selfhosted', 'docker', 'podman', 'container', 'gpu',
       'api key', 'key', 'model', 'language', 'provider', 'fallback', 'offline', 'privacy',
+    ],
+  },
+  {
+    // Device-local (localStorage), unlike every section around it (docs/49).
+    id: 'audio',
+    label: 'Audio & devices',
+    icon: 'pi-volume-up',
+    description: 'Microphone and speaker on this device, loudness, speech speed, speech test',
+    keywords: [
+      'audio', 'device', 'devices', 'microphone', 'mic', 'input', 'speaker', 'output', 'headphones',
+      'bluetooth', 'airpods', 'headset', 'volume', 'loud', 'loudness', 'boost', 'quiet', 'speed',
+      'rate', 'fast', 'slow', 'test', 'level', 'meter', 'record',
     ],
   },
   {
@@ -312,6 +332,8 @@ const HOSTING_LOGIN_SERVER_FIELD: Partial<Record<HostingProviderId, HostnameFiel
     PrimeTemplate,
     ConnectionTabComponent,
     SpeechTabComponent,
+    AudioSettingsComponent,
+    LevelSliderComponent,
   ],
   templateUrl: './config-tab.component.html',
 })
@@ -507,7 +529,8 @@ export class ConfigTabComponent implements OnInit, OnDestroy {
   protected wakeStart = '';
   protected wakeEnd = 'send';
   protected wakeCancel = 'cancel';
-  protected wakeConfidencePercent = 45;
+  /** Wake sensitivity slider, 0–100 (50 = the shipped 0.45 threshold). Saved as wakeConfidenceThreshold. */
+  protected wakeSensitivity = 50;
   protected vadEnabled = true;
   protected silenceSubmitMs = 1500;
   protected workerPollTimeoutMs = 25_000;
@@ -557,11 +580,17 @@ export class ConfigTabComponent implements OnInit, OnDestroy {
   protected webkitLang = 'en-US';
   protected savingTts = false;
 
-  protected readonly wakeConfidencePresets = [
-    { label: '45% — fast (partial)', value: 45 },
-    { label: '65% — balanced', value: 65 },
-    { label: '80% — strict', value: 80 },
-  ];
+  protected get wakeSensitivityText(): string {
+    const threshold = Math.round(wakeSensitivityToThreshold(this.wakeSensitivity) * 100);
+    return `${wakeSensitivityLabel(this.wakeSensitivity)} · ${threshold}%`;
+  }
+
+  protected get wakeSensitivityHint(): string {
+    const threshold = wakeSensitivityToThreshold(this.wakeSensitivity);
+    return threshold < 0.55
+      ? 'Reacts on partial recognition for a faster response. Move left if it wakes on its own.'
+      : 'Waits for a confident, complete match. Move right if it misses you.';
+  }
 
   protected readonly phraseConflict = computed(() => {
     if (this.vadEnabled) return false;
@@ -585,7 +614,7 @@ export class ConfigTabComponent implements OnInit, OnDestroy {
       this.toast.warn('Invalid silence duration', 'Use a value between 500 and 30000 ms.');
       return;
     }
-    const wakeConfidenceThreshold = Number(this.wakeConfidencePercent) / 100;
+    const wakeConfidenceThreshold = wakeSensitivityToThreshold(Number(this.wakeSensitivity));
     if (
       !Number.isFinite(wakeConfidenceThreshold) ||
       wakeConfidenceThreshold < 0 ||
@@ -634,7 +663,7 @@ export class ConfigTabComponent implements OnInit, OnDestroy {
     if (data?.wakeWords.end) this.wakeEnd = data.wakeWords.end;
     if (data?.wakeWords.cancel) this.wakeCancel = data.wakeWords.cancel;
     if (data?.wakeWords.wakeConfidenceThreshold !== undefined) {
-      this.wakeConfidencePercent = Math.round(data.wakeWords.wakeConfidenceThreshold * 100);
+      this.wakeSensitivity = wakeThresholdToSensitivity(data.wakeWords.wakeConfidenceThreshold);
     }
     if (data?.turnSubmit.silenceMs) this.silenceSubmitMs = Number(data.turnSubmit.silenceMs);
     if (data?.turnSubmit.vadEnabled !== undefined) this.vadEnabled = data.turnSubmit.vadEnabled;

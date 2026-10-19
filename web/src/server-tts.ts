@@ -12,10 +12,17 @@
  * played chunk by chunk as it arrives (pcm-scheduler.ts), so the first words
  * are heard while the rest is still being synthesized. Anything else — a
  * whole-file engine, or an older bridge — is one file, played as before.
+ *
+ * The device's speech speed and loudness (docs/49) apply to every path here:
+ * speed by pitch-preserving stretch (or the element's own playbackRate),
+ * loudness as the TTS pile's base volume plus the output bus's boost stage.
  */
 
 import { getSharedAudioContext, unlockAudioContext } from './audio.js';
+import { applyElementSink, getOutputBus } from './audio-output.js';
+import { currentLoudness, currentSpeechSpeed } from './audio-prefs.js';
 import { PcmScheduler, streamedPcmRate, type PcmContextLike } from './pcm-scheduler.js';
+import { Pcm16Stretcher, stretchSamples } from './time-stretch.js';
 import type { TtsPlayContext } from './tts-interrupt.js';
 import { canUseWebkitTts } from './webkit-capabilities.js';
 
@@ -159,9 +166,16 @@ export async function speakServerTts(
     if (currentFetch === download) currentFetch = null;
   }
 
-  if (isIosDevice()) {
-    await playBlobViaAudioContext(blob, ctx);
-    return;
+  // iOS needs Web Audio for playback after an await; a boost needs it anywhere.
+  if (isIosDevice() || currentLoudness().boost > 1) {
+    try {
+      await playBlobViaAudioContext(blob, ctx);
+      return;
+    } catch (err) {
+      if (isIosDevice() || ctx?.signal.aborted) throw err;
+      // A format this engine cannot decode — the element can still play it, unboosted.
+      console.warn('[server-tts] decode failed, playing without boost', err);
+    }
   }
 
   const url = URL.createObjectURL(blob);
@@ -169,6 +183,10 @@ export async function speakServerTts(
   audio.setAttribute('webkit-playsinline', 'true');
   const baseVol = ctx?.baseVolume ?? 1;
   audio.volume = baseVol;
+  // The element keeps the pitch while changing speed — better than any stretch.
+  audio.playbackRate = currentSpeechSpeed();
+  audio.preservesPitch = true;
+  applyElementSink(audio);
   currentAudio = audio;
 
   await new Promise<void>((resolve, reject) => {
@@ -220,7 +238,8 @@ async function playPcmStream(
 
   const gain = audioCtx.createGain();
   gain.gain.value = ctx?.baseVolume ?? 1;
-  gain.connect(audioCtx.destination);
+  gain.connect(getOutputBus());
+  const stretcher = new Pcm16Stretcher(sampleRate, currentSpeechSpeed());
   const scheduler = new PcmScheduler(audioCtx as unknown as PcmContextLike, gain, sampleRate, {
     onStart: () => ctx?.onStart(),
   });
@@ -233,13 +252,14 @@ async function playPcmStream(
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (value) scheduler.push(value);
+      if (value) scheduler.push(stretcher.push(value));
     }
   } catch (err) {
     if (!download.signal.aborted) {
       console.warn('[server-tts] stream ended early', err);
     }
   }
+  if (!download.signal.aborted) scheduler.push(stretcher.flush());
 
   try {
     await scheduler.finish();
@@ -257,14 +277,14 @@ async function playBlobViaAudioContext(blob: Blob, ctx?: TtsPlayContext): Promis
     await audioCtx.resume();
   }
 
-  const buffer = await audioCtx.decodeAudioData(await blob.arrayBuffer());
+  const buffer = stretchAudioBuffer(audioCtx, await audioCtx.decodeAudioData(await blob.arrayBuffer()), currentSpeechSpeed());
   const source = audioCtx.createBufferSource();
   const gain = audioCtx.createGain();
   const baseVol = ctx?.baseVolume ?? 1;
   gain.gain.value = baseVol;
   source.buffer = buffer;
   source.connect(gain);
-  gain.connect(audioCtx.destination);
+  gain.connect(getOutputBus());
   currentBufferSource = source;
   currentGainNode = gain;
 
@@ -297,4 +317,17 @@ async function playBlobViaAudioContext(blob: Blob, ctx?: TtsPlayContext): Promis
       reject(err instanceof Error ? err : new Error(String(err)));
     }
   });
+}
+
+/** Pitch-preserving speed change of a decoded file — every channel, same length. */
+export function stretchAudioBuffer(audioCtx: BaseAudioContext, buffer: AudioBuffer, speed: number): AudioBuffer {
+  if (speed === 1) return buffer;
+  const channels: Float32Array[] = [];
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    channels.push(stretchSamples(buffer.getChannelData(c), buffer.sampleRate, speed));
+  }
+  const length = Math.max(1, ...channels.map((ch) => ch.length));
+  const out = audioCtx.createBuffer(buffer.numberOfChannels, length, buffer.sampleRate);
+  channels.forEach((ch, c) => out.getChannelData(c).set(ch));
+  return out;
 }

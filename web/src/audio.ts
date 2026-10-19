@@ -11,7 +11,27 @@
  * See docs/06-voice-audio-webrtc.md — Background noise filtering.
  */
 
+import { getAudioPrefs } from './audio-prefs.js';
+
 let _audioCtx: AudioContext | null = null;
+
+/**
+ * Create the shared context on the chosen speaker (docs/49). `sinkId` is a
+ * Chromium 110+ option; other engines ignore unknown dictionary members, and
+ * a remembered device that has since gone away throws — so fall back to the
+ * system default rather than having no audio at all.
+ */
+function createSharedAudioContext(): AudioContext {
+  const sinkId = getAudioPrefs().outputDeviceId;
+  if (sinkId) {
+    try {
+      return new AudioContext({ sinkId } as AudioContextOptions);
+    } catch {
+      // Device unplugged or not supported — default output below.
+    }
+  }
+  return new AudioContext();
+}
 
 /** Browser-native mic processing — always on when supported. */
 export const MIC_MEDIA_CONSTRAINTS: MediaTrackConstraints = {
@@ -47,7 +67,7 @@ const DEFAULT_FILTER: Required<MicFilterOptions> = {
  */
 export async function unlockAudioContext(): Promise<void> {
   if (!_audioCtx) {
-    _audioCtx = new AudioContext();
+    _audioCtx = createSharedAudioContext();
   }
   if (_audioCtx.state === 'suspended') {
     await _audioCtx.resume();
@@ -105,10 +125,15 @@ export async function primeTtsPlaybackUnlock(): Promise<void> {
   ttsPlaybackPrimed = true;
 }
 
+/** The shared context if one exists — without creating it. */
+export function peekSharedAudioContext(): AudioContext | null {
+  return _audioCtx;
+}
+
 /** Shared AudioContext for mic processing graphs. */
 export function getSharedAudioContext(): AudioContext {
   if (!_audioCtx) {
-    _audioCtx = new AudioContext();
+    _audioCtx = createSharedAudioContext();
   }
   return _audioCtx;
 }
