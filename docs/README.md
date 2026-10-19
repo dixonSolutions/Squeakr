@@ -54,6 +54,7 @@ MCP tool layer drives worker agents on projects hosted on a home machine.
 | [`43-package-repos.md`](./43-package-repos.md) | Signed apt/dnf repositories on GitHub Pages: setup, signing key, rotation, user install | Package repos, signing key, release publishing |
 | [`44-channels.md`](./44-channels.md) | Discord / Telegram / Slack / WhatsApp as remote access: Discord voice calls, voice messages, the `@Squeakr` command line, default sessions per conversation, platform research, Bedrock S2S answer | Channels, #93 |
 | [`45-rename-squeakr.md`](./45-rename-squeakr.md) | AgentVoice → Squeakr: everything renamed, what an old install keeps reading, `scripts/migrate-to-squeakr.sh` and `squeakr upgrade-from-agentvoice` for npm / .deb / .rpm / clones, the final 0.1.6 hand-over and the release order | Upgrading an AgentVoice install, releasing the rename |
+| [`48-show-media.md`](./48-show-media.md) | `show_media` / `media_control`: images, video and audio on the phone — raw fullscreen with a close icon, autoplay / auto-close / close-on-end, self-destruct or session-long, remembered video frames, live streaming of files another agent is still writing, Range serving | Showing the user a video, a recording, a render in progress |
 
 ## One-paragraph summary
 

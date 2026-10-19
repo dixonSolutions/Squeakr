@@ -31,6 +31,7 @@ import { handleNewSession, handleSessionInfo } from './tools/session.js';
 import { handleCursorDiff, handleCursorRevert } from './tools/gitTools.js';
 import { handleCursorAgentInfo, handleCursorAgentStatus } from './tools/system.js';
 import { handleMcpList, handleMcpTools } from './tools/mcpInspect.js';
+import { handleShowMedia, handleMediaControl } from './server/displayToolHandlers.js';
 import { handleShowImages } from './server/imageToolHandlers.js';
 import { handleSendFiles } from './server/fileToolHandlers.js';
 
@@ -153,6 +154,10 @@ async function route(
       return handleMcpTools(a);
     case 'show_images':
       return handleShowImages(a);
+    case 'show_media':
+      return handleShowMedia(a);
+    case 'media_control':
+      return handleMediaControl(a);
     case 'send_files':
       return handleSendFiles(a);
     default: {

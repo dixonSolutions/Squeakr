@@ -1,14 +1,14 @@
 /**
- * show_images — push an image carousel to the connected PWA (non-blocking).
+ * show_images — push screenshots to the user's phone (non-blocking).
+ *
+ * Kept for agents and prompts that know it; it is now `show_media` with
+ * images only: they open fullscreen for `duration_ms` (default 8 s), then
+ * stay under the media button. A new show_images call replaces the previous
+ * show_images batch, and leaves whatever show_media put up alone.
  */
 
-import { childLogger } from '../../log.js';
-import { notifyPhone } from '../../push/notifyPhone.js';
 import { ShowImagesSchema } from '../schemas.js';
-import { setImages, DEFAULT_BATCH_TTL_MS, resolveAllowedImagePath } from './imageRegistry.js';
-import { publishAgentFiles } from './fileToolHandlers.js';
-
-const log = childLogger('mcp:server:imageTools');
+import { handleShowMedia } from './displayToolHandlers.js';
 
 export interface ShowImagesResult {
   ok: boolean;
@@ -26,43 +26,24 @@ export function handleShowImages(args: unknown): ShowImagesResult {
   }
 
   const { images, duration_ms, caption, publish } = parsed.data;
-  const durationMs = duration_ms ?? 8000;
+  const result = handleShowMedia(
+    {
+      items: images.map((img) => ({ ...img, kind: 'image' as const })),
+      display: 'fullscreen',
+      auto_close_ms: duration_ms ?? 8000,
+      ...(caption ? { caption } : {}),
+      ...(publish === false ? { publish: false } : {}),
+    },
+    { origin: 'show_images', replaceOrigin: true },
+  );
 
-  try {
-    const { batchId, images: carouselImages } = setImages(images, DEFAULT_BATCH_TTL_MS);
-
-    const payload = {
-      type: 'show_images' as const,
-      batch_id: batchId,
-      images: carouselImages,
-      duration_ms: durationMs,
-      caption: caption ?? null,
-    };
-
-    void notifyPhone(payload).then((r) => {
-      log.info(
-        { batchId, count: carouselImages.length, delivered: r.ws || r.webPush + r.apns > 0, durationMs },
-        'show_images pushed',
-      );
-    });
-
-    // Chat channels post them as attachments (channels/hub.ts).
-    if (publish !== false) {
-      publishAgentFiles(
-        images.map((img) => (img.path ? { ...img, path: resolveAllowedImagePath(img.path) ?? img.path } : img)),
-        caption ?? null,
-      );
-    }
-
-    return {
-      ok: true,
-      count: carouselImages.length,
-      delivered: true,
-      batch_id: batchId,
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    log.warn({ err }, 'show_images failed');
-    return { ok: false, count: 0, delivered: false, error: message };
+  if (!result['ok']) {
+    return { ok: false, count: 0, delivered: false, error: String(result['error'] ?? 'show_images failed') };
   }
+  return {
+    ok: true,
+    count: images.length,
+    delivered: true,
+    batch_id: String(result['batch_id']),
+  };
 }

@@ -1,0 +1,91 @@
+<!--
+  Fullscreen: the raw media and a close icon on its top-right corner — no
+  backdrop, no card, no border. Tracked by id so each item gets its own element.
+-->
+@for (item of openList(); track item.id) {
+  <div class="cv-media-full">
+    <div
+      class="cv-media-frame"
+      [class.cv-media-frame--audio]="item.kind === 'audio'"
+      (touchstart)="onTouchStart($event)"
+      (touchend)="onTouchEnd($event)">
+      @switch (item.kind) {
+        @case ('image') {
+          <img class="cv-media-el" [src]="item.src" [alt]="item.caption ?? item.name ?? 'Image from the agent'" />
+        }
+        @case ('video') {
+          <video
+            #player
+            class="cv-media-el"
+            [src]="item.src"
+            [loop]="item.loop"
+            playsinline
+            preload="auto"
+            [attr.aria-label]="item.caption ?? item.name ?? 'Video from the agent'"
+            (click)="onTap()"
+            (loadedmetadata)="onLoaded(item)"
+            (play)="onPlayback(item, 'playing')"
+            (pause)="onPlayback(item, 'paused')"
+            (ended)="onEnded(item)"
+            (error)="onPlayback(item, 'error')"
+            (timeupdate)="onTimeUpdate(item)"></video>
+        }
+        @case ('audio') {
+          <audio
+            #player
+            class="cv-media-audio"
+            [src]="item.src"
+            [loop]="item.loop"
+            controls
+            preload="auto"
+            [attr.aria-label]="item.caption ?? item.name ?? 'Audio from the agent'"
+            (loadedmetadata)="onLoaded(item)"
+            (play)="onPlayback(item, 'playing')"
+            (pause)="onPlayback(item, 'paused')"
+            (ended)="onEnded(item)"
+            (error)="onPlayback(item, 'error')"
+            (timeupdate)="onTimeUpdate(item)"></audio>
+        }
+      }
+      <button type="button" class="cv-media-close" aria-label="Close" (click)="close()">
+        <i class="pi pi-times" aria-hidden="true"></i>
+      </button>
+    </div>
+  </div>
+}
+
+@if (items().length > 0) {
+  @if (trayOpen()) {
+    <div class="cv-media-tray" role="list" aria-label="Media from the agent">
+      @for (item of items(); track item.id) {
+        <button type="button" class="cv-media-tile" role="listitem" (click)="openFromTray(item.id)">
+          <span class="cv-media-thumb">
+            @if (item.kind === 'image') {
+              <img [src]="item.src" alt="" />
+            } @else if (item.kind === 'video' && !item.live) {
+              <video [src]="item.src" muted playsinline preload="metadata" (loadedmetadata)="showFrame($event, item.id)"></video>
+              <i class="pi pi-play cv-media-thumb-badge" aria-hidden="true"></i>
+            } @else {
+              <i [class]="item.kind === 'audio' ? 'pi pi-volume-up' : 'pi pi-video'" aria-hidden="true"></i>
+            }
+          </span>
+          <span class="cv-media-tile-label">
+            {{ item.caption ?? item.name ?? item.kind }}
+            @if (item.live) {
+              <span class="cv-media-live">live</span>
+            }
+          </span>
+        </button>
+      }
+    </div>
+  }
+  <button
+    type="button"
+    class="cv-media-fab"
+    [attr.aria-expanded]="trayOpen()"
+    aria-label="Media from the agent"
+    (click)="trayOpen.set(!trayOpen())">
+    <i class="pi pi-images" aria-hidden="true"></i>
+    <span>{{ items().length }}</span>
+  </button>
+}

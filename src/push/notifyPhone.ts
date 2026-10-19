@@ -89,14 +89,18 @@ function pushPayloadForType(msg: Record<string, unknown>): {
         voip: false,
       };
     }
-    case 'show_images': {
+    case 'media_show': {
+      // show_media / show_images / send_files (docs/48). Only a batch that
+      // opens on the screen is worth waking the phone for; tray items wait.
+      if (msg['open_id'] == null) return null;
       const caption = msg['caption'] as string | undefined;
+      const items = Array.isArray(msg['items']) ? (msg['items'] as Array<{ kind?: string }>) : [];
+      const kind = items[0]?.kind === 'video' ? 'a video' : items[0]?.kind === 'audio' ? 'audio' : 'screenshots';
       return {
         title: 'Squeakr',
-        // Provider parity (docs/39 Part B): this said "from Cursor" whichever
-        // CLI produced the screenshots.
-        body: caption?.slice(0, 180) ?? `New screenshots from ${agentDisplayName()}`,
-        tag: `images-${msg['batch_id'] ?? 'batch'}`,
+        // Provider parity (docs/39 Part B): never a hardcoded vendor name.
+        body: caption?.slice(0, 180) ?? `${agentDisplayName()} sent you ${kind}`,
+        tag: `media-${msg['batch_id'] ?? 'batch'}`,
         url: '/?tab=voice',
         voip: false,
       };

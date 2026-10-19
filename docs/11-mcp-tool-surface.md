@@ -77,7 +77,9 @@ Parallel Agents capability exposed via voice.
 
 | Tool | Purpose |
 | --- | --- |
-| `show_images(images, duration_ms?, caption?)` | Push image carousel to PWA. New batch replaces old. See [`18-image-carousel.md`](./18-image-carousel.md). |
+| `show_media(items, display?, autoplay?, muted?, loop?, auto_close_ms?, close_on_end?, self_destruct?, replace?, caption?, publish?)` | Put images, video or audio on the phone: raw fullscreen with a close icon, or under the media button. Self-destruct timer or `"never"` (session-long); `live` streams a file still being written. See [`48-show-media.md`](./48-show-media.md). |
+| `media_control(action, media_id?, …)` | `status` / `open` / `close` / `play` / `pause` / `seek` / `remove` / `finish` for shown media; `status` returns the phone's playback state. |
+| `show_images(images, duration_ms?, caption?)` | Shorthand for `show_media` with images: fullscreen for `duration_ms`, then under the media button. New batch replaces the previous `show_images` batch. See [`18-image-carousel.md`](./18-image-carousel.md). |
 
 ---
 

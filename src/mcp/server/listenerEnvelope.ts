@@ -42,7 +42,7 @@ interface ToolResult {
  * Tools whose result is not a JSON object the agent reads as state — leaving
  * them alone keeps binary / display payloads untouched.
  */
-const SKIP = new Set(['show_images', 'send_files']);
+const SKIP = new Set(['show_images', 'show_media', 'send_files']);
 
 /**
  * Merge the listener block into a tool result, in place where the result is

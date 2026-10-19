@@ -38,7 +38,6 @@ import { VoiceProvidersService } from '../../services/voice-providers.service';
 import { VoiceSessionService } from '../../services/voice-session.service';
 import { ApprovalPanelComponent } from '../approval-panel/approval-panel.component';
 import { AuthCardComponent } from '../auth-card/auth-card.component';
-import { ImageCarouselComponent } from '../image-carousel/image-carousel.component';
 import { LiveLogPanelComponent } from '../live-log-panel/live-log-panel.component';
 import {
   VoiceOrbComponent,
@@ -127,7 +126,6 @@ const DEFAULT_EFFORT_VALUE = '__default__';
     ToggleSwitch,
     ApprovalPanelComponent,
     AuthCardComponent,
-    ImageCarouselComponent,
     VoiceOrbComponent,
     LiveLogPanelComponent,
   ],

@@ -70,7 +70,8 @@ import { registerToolRoutes } from './routes/tools.js';
 import { registerWorkspaceRoutes } from './routes/workspace.js';
 import { registerEventsSocket } from './routes/eventsSocket.js';
 import { applyApprovalResponse } from './mcp/server/approvalResponses.js';
-import { getImage, readImageBytes, clearImages } from './mcp/server/imageRegistry.js';
+import { getDisplayRegistry, type PlaybackStateName } from './display/registry.js';
+import { registerDisplayRoutes, DISPLAY_ROUTE_PREFIX } from './display/serve.js';
 import { getActiveProvider } from './providers/agents/registry.js';
 
 /** Required for vosk-browser SharedArrayBuffer (wake-word WASM). */
@@ -246,40 +247,23 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.addHook('preHandler', async (req, reply) => {
     if (req.method === 'OPTIONS') return;
     if (req.url.startsWith('/api/')) {
-      // Ephemeral key auth — img tags cannot send Bearer tokens.
-      if (req.url.startsWith('/api/images/')) return;
+      // Per-item key auth — <img> / <video> cannot send Bearer tokens.
+      if (req.url.startsWith(DISPLAY_ROUTE_PREFIX)) return;
       await requireAuth(req, reply);
     }
   });
 
-  /** GET /api/images/:id?k= — serve carousel images (ephemeral key, not Bearer). */
-  app.get<{ Params: { id: string }; Querystring: { k?: string } }>(
-    '/api/images/:id',
-    async (req, reply) => {
-      const accessKey = typeof req.query.k === 'string' ? req.query.k : '';
-      if (!accessKey) {
-        return reply.code(401).send({ error: 'Missing access key' });
-      }
+  // ── Agent-shown media (show_media, docs/48) ────────────────────────────
 
-      const stored = getImage(req.params.id, accessKey);
-      if (!stored) {
-        return reply.code(404).send({ error: 'Image not found or expired' });
-      }
-
-      if (stored.kind === 'url') {
-        return reply.redirect(stored.value);
-      }
-
-      const bytes = readImageBytes(stored);
-      if (!bytes) {
-        return reply.code(404).send({ error: 'Image not readable' });
-      }
-
-      reply.header('Content-Type', stored.mime);
-      reply.header('Cache-Control', 'private, no-store');
-      return reply.send(bytes);
-    },
-  );
+  /** GET /api/display/:id?k= — images, video, audio; ranges and live files. */
+  registerDisplayRoutes(app);
+  const display = getDisplayRegistry();
+  display.setEmitter((frame) => void notifyPhone(frame));
+  // `self_destruct: "never"` means "as long as the session lives": a hang-up,
+  // or the grace window running out, ends it.
+  getPresence().onChange((snap) => {
+    if (snap.state === 'away' || snap.state === 'hung_up') display.clear('session_ended');
+  });
 
   // ── Project endpoints ──────────────────────────────────────────────────
 
@@ -413,6 +397,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   //   { type: "auth", token: "<app-token>" }           First frame — auth
   //   { type: "tool_call", call_id, name, arguments }  Voice provider tool call
   //   { type: "speaking", value: bool }                TTS state update for narrator
+  //   { type: "media_state", media_id, state, open, position_s?, duration_s? }  docs/48
   //
   // Bridge → Phone:
   //   { type: "auth_ok" }
@@ -486,6 +471,8 @@ export async function buildServer(): Promise<FastifyInstance> {
           for (const request of getPendingApprovals()) {
             void notifyPhone({ type: `${request.kind}_request`, ...request });
           }
+          // Media still shown (docs/48) — the phone's copy may be stale.
+          socket.send(JSON.stringify(getDisplayRegistry().syncFrame()));
 
           log.info({ sessionKey }, 'ws authenticated');
           return;
@@ -517,6 +504,24 @@ export async function buildServer(): Promise<FastifyInstance> {
         // TTS state update — the narrator defers a spoken line while TTS runs.
         if (msg['type'] === 'speaking' && typeof msg['value'] === 'boolean') {
           relaySession?.setSpeaking(msg['value']);
+          return;
+        }
+
+        // PWA → bridge: playback of an item from show_media (docs/48).
+        if (msg['type'] === 'media_state' && typeof msg['media_id'] === 'string') {
+          const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+          const states: PlaybackStateName[] = ['shown', 'loading', 'playing', 'paused', 'ended', 'closed', 'error'];
+          const state = states.find((st) => st === msg['state']);
+          if (state) {
+            getDisplayRegistry().reportPlayback(msg['media_id'], {
+              state,
+              open: msg['open'] === true,
+              position_s: num(msg['position_s']),
+              duration_s: num(msg['duration_s']),
+              muted: typeof msg['muted'] === 'boolean' ? msg['muted'] : null,
+              ...(typeof msg['message'] === 'string' ? { message: msg['message'].slice(0, 300) } : {}),
+            });
+          }
           return;
         }
 
@@ -569,7 +574,6 @@ export async function buildServer(): Promise<FastifyInstance> {
         }
         // Deregister control socket broadcaster.
         registerControlSocket(null);
-        clearImages();
       });
 
       socket.on('error', (err: Error) => {
