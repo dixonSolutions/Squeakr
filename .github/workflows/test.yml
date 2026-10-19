@@ -5,7 +5,7 @@
 # versions a user is likely to have, then the end-to-end scripts that drive
 # the real CLI, bridge, speech-to-text path and MCP transport
 # (scripts/live-pipe-test.mjs) and the real PWA in headless Chromium
-# (scripts/live-pwa-stream-test.mjs).
+# (scripts/live-pwa-stream-test.mjs, scripts/live-audio-settings-test.mjs).
 name: test
 
 on:
@@ -96,3 +96,8 @@ jobs:
       # microphone, and checks the agent heard and answered.
       - name: PWA streams its mic to the agent
         run: node scripts/live-pwa-stream-test.mjs
+
+      # Config → Audio & devices: mic / speaker pickers, loudness, speech speed,
+      # wake sensitivity and the speech test, measured in the page (docs/49).
+      - name: PWA audio & devices settings
+        run: node scripts/live-audio-settings-test.mjs
