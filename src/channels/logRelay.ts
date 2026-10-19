@@ -49,6 +49,12 @@ export function logLine(payload: unknown): string | null {
       return str('message') ? `❌ ${str('message')}` : null;
     case 'user_turn':
       return str('text') ? `🎙️ \`${str('source') || 'turn'}\` ${str('text')}` : null;
+    case 'agent_audio': {
+      const label = str('label') || str('stream_id');
+      if (str('op') === 'open') return `🔊 agent audio \`${str('mode') || 'queue'}\` ${label}`;
+      if (str('op') === 'stop') return `🔇 agent audio ${str('stream_id')} stopped`;
+      return null;
+    }
     case 'agent_files': {
       const files = Array.isArray(m['files']) ? (m['files'] as Array<{ name?: string; path?: string; url?: string }>) : [];
       const names = files.map((f) => f.name ?? (f.path ? f.path.split('/').pop() : f.url) ?? 'file');

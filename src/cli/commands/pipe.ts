@@ -293,7 +293,12 @@ function runPipe(opts: PipeOptions, base: string, token: string, done: (code: nu
     } catch {
       return;
     }
-    emitJson(msg);
+    // Agent audio (docs/47) is not played here; keep its base64 out of --json.
+    emitJson(
+      msg['type'] === 'agent_audio' && typeof msg['pcm'] === 'string'
+        ? { ...msg, pcm: undefined, bytes: Math.floor((msg['pcm'].length * 3) / 4) }
+        : msg,
+    );
     lastActivity = Date.now();
 
     switch (msg['type']) {
@@ -349,6 +354,11 @@ function runPipe(opts: PipeOptions, base: string, token: string, done: (code: nu
       }
       case 'speak':
         if (!opts.json) say(`agent ◂ ${String(msg['text'] ?? '')}`);
+        break;
+      case 'agent_audio':
+        if (msg['op'] === 'open' && !opts.json) {
+          say(`agent ◂ 🔊 "${String(msg['label'] ?? 'audio')}" (${String(msg['mode'] ?? 'queue')} — plays on the phone or a call)`);
+        }
         break;
       case 'thinking':
         agentBusy = msg['value'] === true;

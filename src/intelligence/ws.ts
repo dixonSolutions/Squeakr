@@ -50,6 +50,7 @@ import {
   registerTurnCompleteHook,
   registerVoiceSession,
 } from '../mcp/server/voiceToolHandlers.js';
+import { reportAgentAudioPlayback } from '../mcp/server/audioStreamToolHandlers.js';
 import { submitAgentNativeTurn, TurnError } from '../executor/agentTurns.js';
 import { recordAgentSpeech, recordUserTurn } from '../logging/transcripts.js';
 
@@ -240,6 +241,11 @@ export function registerWebSocket(app: FastifyInstance): void {
         if (msg['type'] === 'hangup') {
           presence?.hangUp();
           presence = null;
+          return;
+        }
+
+        if (msg['type'] === 'agent_audio_state') {
+          reportAgentAudioPlayback('phone', msg);
           return;
         }
 

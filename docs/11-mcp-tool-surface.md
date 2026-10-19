@@ -79,6 +79,18 @@ Parallel Agents capability exposed via voice.
 | --- | --- |
 | `show_images(images, duration_ms?, caption?)` | Push image carousel to PWA. New batch replaces old. See [`18-image-carousel.md`](./18-image-carousel.md). |
 
+### Group: Audio out (non-blocking)
+
+The agent's own audio — files or raw PCM packets — played to the user. See [`47-agent-audio-streams.md`](./47-agent-audio-streams.md).
+
+| Tool | Purpose |
+| --- | --- |
+| `audio_stream_open(label?, mode?, volume?, format?, log?, path \| url \| data?, close?)` | Open a stream: `queue` (in line with speech) or `async` (plays at once, speech goes over it). With a file and `close: true` it plays a one-shot in one call. |
+| `audio_stream_write(stream_id, path \| url \| data \| packet)` | Append a file or a raw PCM packet. Writes play in call order. |
+| `audio_stream_close(stream_ids? \| all, drain?)` | Close several or all of your streams at once; drain or stop. |
+| `audio_stream_list(include_closed?, include_log?)` | Your streams and what each listener reports. |
+| `audio_stream_log(stream_ids, note?)` | Read stream logs; add a note. |
+
 ---
 
 ---

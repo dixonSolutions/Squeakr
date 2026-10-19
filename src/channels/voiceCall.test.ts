@@ -18,6 +18,7 @@ function harness() {
   const delivered: string[] = [];
   const played: string[] = [];
   const lines: string[] = [];
+  const audioReports: string[] = [];
   let release = 0;
   const call = new VoiceCall({
     name: 'test call',
@@ -61,6 +62,7 @@ function harness() {
         return () => (send = null);
       },
       registerPresence: () => ({ release() {} }),
+      reportAudio: (_client, id, state) => audioReports.push(`${id}:${state}`),
       prepare: async () => undefined,
       segmentSettings: () => ({ segmentSilenceMs: 700, maxSegmentMs: 15_000, minSpeechMs: 300, speechThreshold: 0.012, preRollMs: 300 }),
       turnSettings: () => ({ inputMode: 'turns', wakeWordsEnabled: false, wakeWords: { start: 'hey squeaker' }, turnSubmit: { silenceMs: 700, vadEnabled: true } }),
@@ -71,7 +73,9 @@ function harness() {
     delivered,
     played,
     lines,
+    audioReports,
     say: (text: string) => send?.({ type: 'speak', text }),
+    bridge: (payload: Record<string, unknown>) => send?.(payload),
     letPlay: () => release++,
     get registered() {
       return send !== null;
@@ -80,6 +84,65 @@ function harness() {
 }
 
 describe('VoiceCall', () => {
+  it('plays agent audio streams: queued ones in line, async ones next', async () => {
+    const h = harness();
+    h.call.start();
+    h.say('first');
+    await flush();
+    const audio = (op: string, id: string, extra: Record<string, unknown> = {}) =>
+      h.bridge({ type: 'agent_audio', op, stream_id: id, ...extra });
+    // A stream takes its place when its audio arrives.
+    audio('open', 'q', { label: 'queued', mode: 'queue', sample_rate: 24_000 });
+    audio('open', 'a', { label: 'chime', mode: 'async', sample_rate: 24_000 });
+    audio('chunk', 'q', { pcm: Buffer.from('QQ').toString('base64') });
+    h.say('after');
+    audio('chunk', 'a', { pcm: Buffer.from('AA').toString('base64') });
+    audio('end', 'q');
+    audio('end', 'a');
+    for (let i = 0; i < 3; i++) {
+      h.letPlay();
+      await flush();
+    }
+    assert.deepEqual(h.played, ['24000:first', '24000:AA', '24000:QQ', '24000:after']);
+    assert.deepEqual(h.audioReports, ['a:playing', 'a:ended', 'q:playing', 'q:ended']);
+    h.letPlay();
+    await h.call.close();
+  });
+
+  it('does not hold replies behind an agent audio stream left open', async () => {
+    const h = harness();
+    h.call.start();
+    h.bridge({ type: 'agent_audio', op: 'open', stream_id: 'q', mode: 'queue' });
+    h.bridge({ type: 'agent_audio', op: 'chunk', stream_id: 'q', pcm: Buffer.from('QQ').toString('base64') });
+    h.say('reply');
+    await flush(1700); // the stream runs dry and steps aside
+    h.letPlay();
+    await flush();
+    assert.deepEqual(h.played, ['24000:QQ', '24000:reply']);
+    h.bridge({ type: 'agent_audio', op: 'end', stream_id: 'q' });
+    assert.deepEqual(h.audioReports, ['q:playing', 'q:ended']);
+    h.letPlay();
+    await h.call.close();
+  });
+
+  it('drops queued agent audio on a barge-in and stops it on the bridge\'s stop', async () => {
+    const h = harness();
+    h.call.start();
+    h.say('first');
+    await flush();
+    h.bridge({ type: 'agent_audio', op: 'open', stream_id: 'q', mode: 'queue' });
+    h.bridge({ type: 'agent_audio', op: 'chunk', stream_id: 'q', pcm: Buffer.from('QQ').toString('base64') });
+    h.bridge({ type: 'agent_audio', op: 'open', stream_id: 's', mode: 'queue' });
+    h.bridge({ type: 'agent_audio', op: 'stop', stream_id: 's' });
+    assert.deepEqual(h.audioReports, ['s:stopped']);
+    // Opened but nothing written yet: not in the queue, so a barge-in leaves it be.
+    h.bridge({ type: 'agent_audio', op: 'open', stream_id: 'empty', mode: 'queue' });
+    h.call.interrupt();
+    await flush();
+    assert.deepEqual(h.audioReports, ['s:stopped', 'q:stopped']);
+    await h.call.close();
+  });
+
   it('cuts a speaker’s segment when the platform says they paused, and hands it to the agent', async () => {
     const h = harness();
     h.call.start();

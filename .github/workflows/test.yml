@@ -68,6 +68,11 @@ jobs:
       - name: End to end — channels
         run: node scripts/live-channels-test.mjs
 
+      # Agent audio streams over the real MCP transport to a stand-in phone:
+      # decoding, ordering, ownership, bulk close, logs (docs/47).
+      - name: End to end — agent audio streams
+        run: node scripts/live-agent-audio-test.mjs
+
   pwa-stream:
     name: PWA direct stream (headless Chromium)
     runs-on: ubuntu-latest
@@ -96,3 +101,8 @@ jobs:
       # microphone, and checks the agent heard and answered.
       - name: PWA streams its mic to the agent
         run: node scripts/live-pwa-stream-test.mjs
+
+      # The agent's own audio (docs/47) played by the page's Web Audio code:
+      # queue vs async ordering against speak(), packets, stop, dry streams.
+      - name: PWA plays agent audio streams
+        run: node scripts/live-pwa-agent-audio-test.mjs

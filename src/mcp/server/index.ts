@@ -21,6 +21,8 @@
  *   MCP inspect  — agent_mcp_list, agent_mcp_tools
  *   Away policy  — agent_away_policy
  *   User display — show_images, send_files
+ *   Audio out    — audio_stream_open, audio_stream_write, audio_stream_close,
+ *                  audio_stream_list, audio_stream_log (docs/47)
  *   User interact — request_user_input, submit_plan_for_approval
  *
  * Deprecated aliases kept for one release (docs/40 §2): agent_submit →
@@ -73,6 +75,14 @@ import {
 } from './sessionToolHandlers.js';
 import { handleShowImages } from './imageToolHandlers.js';
 import { handleSendFiles } from './fileToolHandlers.js';
+import {
+  handleAudioStreamOpen,
+  handleAudioStreamWrite,
+  handleAudioStreamClose,
+  handleAudioStreamList,
+  handleAudioStreamLog,
+  closeAgentAudioOwner,
+} from './audioStreamToolHandlers.js';
 import { voiceTurnQueue } from './turnQueue.js';
 import {
   approvalPolicy,
@@ -1045,6 +1055,88 @@ function buildMcpServer(sessionKey: string): McpServer {
     },
   );
 
+  // ── Agent audio streams (docs/47) ───────────────────────────────────────
+
+  server.tool(
+    'audio_stream_open',
+    'Open a stream to play your own audio to the user — sound effects, recordings, generated clips, a live PCM feed. ' +
+      'Returns stream_id; then audio_stream_write files or packets into it and audio_stream_close it. ' +
+      'mode "queue" (default) waits its turn in the speech queue: speak() lines and queued streams sent after it wait until it has played. ' +
+      'mode "async" starts at once and plays under/alongside everything else — speech and other streams go over it, nothing waits for it. ' +
+      'To play one file, do it in a single call: audio_stream_open({ path, mode, close: true }). ' +
+      'You can hold many streams at once. Pass format only if you will write raw PCM packets. ' +
+      'Returns error NO_VOICE_SESSION if nobody is listening.',
+    {
+      label: z.string().max(120).optional().describe('Name shown to the user and in logs, e.g. "build chime".'),
+      mode: z.enum(['queue', 'async']).optional().describe('queue (default): in line with speech. async: plays now, alongside speech.'),
+      volume: z.number().min(0).max(1).optional().describe('0–1 (default 1). Use ~0.3 for async background audio.'),
+      format: z
+        .object({
+          encoding: z.enum(['pcm_s16le', 'pcm_f32le']).optional().describe('Default pcm_s16le.'),
+          sample_rate: z.number().int().min(8000).max(192_000),
+          channels: z.number().int().min(1).max(8).optional().describe('Default 1; interleaved.'),
+        })
+        .optional()
+        .describe('Format of raw PCM packets written with `packet`. Not needed for files.'),
+      log: z.boolean().optional().describe('False keeps this stream out of the transcript and the phone log (default true).'),
+      path: z.string().min(1).optional().describe('A first file to play (under a project or temp) — same as an audio_stream_write.'),
+      url: z.string().min(1).optional().describe('A first file to play, by http(s) URL.'),
+      data: z.string().min(1).optional().describe('A first file to play, base64.'),
+      close: z.boolean().optional().describe('Close the stream once that file is in (it still plays to the end): a one-shot.'),
+    },
+    async (args) => voiceToolResponse(await handleAudioStreamOpen(sessionKey, args)),
+  );
+
+  server.tool(
+    'audio_stream_write',
+    'Append audio to one of your open streams. Exactly one of: path (local file under a project or temp), url (http/https), ' +
+      'data (base64 whole file) — WAV and Ogg/Opus always; mp3, flac, m4a, webm… when ffmpeg is installed — ' +
+      'or packet (base64 raw PCM in the format given to audio_stream_open). Writes play in call order. ' +
+      'Returns as soon as the audio is sent, not when it has played (see audio_stream_list playback).',
+    {
+      stream_id: z.string().min(1),
+      path: z.string().min(1).optional(),
+      url: z.string().min(1).optional(),
+      data: z.string().min(1).optional().describe('Base64 or data-URI of a whole audio file.'),
+      packet: z.string().min(1).optional().describe('Base64 raw PCM packet; any size, may split samples.'),
+    },
+    async (args) => voiceToolResponse(await handleAudioStreamWrite(sessionKey, args)),
+  );
+
+  server.tool(
+    'audio_stream_close',
+    'Close one, several, or all of your audio streams in one call. drain=true (default) lets what was written finish playing; ' +
+      'drain=false stops it now. Streams are also closed for you when your session ends or after 10 min without writes.',
+    {
+      stream_ids: z.array(z.string().min(1)).max(64).optional(),
+      all: z.boolean().optional().describe('Close every stream you have open.'),
+      drain: z.boolean().optional().describe('Default true: play out, then close. false: silence now.'),
+    },
+    async (args) => voiceToolResponse(await handleAudioStreamClose(sessionKey, args)),
+  );
+
+  server.tool(
+    'audio_stream_list',
+    'Your audio streams: mode, audio written, and what each listener reports (playing / ended / stopped). ' +
+      'include_log adds each stream\'s event log; include_closed adds recently closed streams.',
+    {
+      include_closed: z.boolean().optional(),
+      include_log: z.boolean().optional(),
+    },
+    async (args) => voiceToolResponse(handleAudioStreamList(sessionKey, args)),
+  );
+
+  server.tool(
+    'audio_stream_log',
+    'Read the event logs of audio streams (open or recently closed) and optionally add your own note to them — ' +
+      'e.g. what a clip was or why it was played. Notes also go to the session transcript and the phone\'s log.',
+    {
+      stream_ids: z.array(z.string().min(1)).min(1).max(64),
+      note: z.string().max(500).optional(),
+    },
+    async (args) => voiceToolResponse(handleAudioStreamLog(sessionKey, args)),
+  );
+
   // ── User interaction (approvals & questions) ───────────────────────────
 
   server.tool(
@@ -1446,6 +1538,7 @@ export function registerMcpServer(app: FastifyInstance): void {
       transports.set(newId, transport);
       transport.onclose = () => {
         transports.delete(newId);
+        closeAgentAudioOwner(newId);
         log.info({ sessionId: newId }, 'mcp session closed');
       };
 
@@ -1469,11 +1562,12 @@ export function registerMcpServer(app: FastifyInstance): void {
       if (transport) {
         await transport.close();
         transports.delete(sessionId);
+        closeAgentAudioOwner(sessionId);
         log.info({ sessionId }, 'mcp session deleted');
       }
     }
     await reply.code(204).send();
   });
 
-  log.info('mcp server registered at /mcp (37 tools)');
+  log.info('mcp server registered at /mcp (49 tools)');
 }

@@ -149,6 +149,11 @@ export class PcmScheduler {
     return this.started;
   }
 
+  /** Audio already scheduled but not yet played, seconds. */
+  get aheadSec(): number {
+    return Math.max(0, this.nextAt - this.ctx.currentTime);
+  }
+
   private settle(): void {
     if (this.inputDone && this.live.size === 0) this.resolveEnded();
   }

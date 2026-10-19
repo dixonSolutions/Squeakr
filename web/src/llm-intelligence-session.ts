@@ -11,6 +11,8 @@
  */
 
 import { acquireMic, type MicLease } from './mic-service.js';
+import { AgentAudioPlayer, type AgentAudioState } from './agent-audio.js';
+import type { PcmContextLike } from './pcm-scheduler.js';
 import {
   createMicProcessingChain,
   getSharedAudioContext,
@@ -141,6 +143,22 @@ export class LlmIntelligenceSession {
   private sttBackend: SttBackend = 'text_only';
   private ttsBackend: TtsBackend = 'none';
   private readonly ttsPile = new TtsPile((text, ctx) => this.playSpeakUtterance(text, ctx));
+  /** The agent's own audio streams (docs/47): queued ones ride the pile, async ones play at once. */
+  private readonly agentAudio = new AgentAudioPlayer({
+    context: () => getSharedAudioContext() as unknown as PcmContextLike,
+    output: (volume) => {
+      const ctx = getSharedAudioContext();
+      const gain = ctx.createGain();
+      gain.gain.value = volume;
+      gain.connect(ctx.destination);
+      return { node: gain, release: () => gain.disconnect() };
+    },
+    enqueueLine: (line) => this.ttsPile.enqueueRaw(line),
+    report: (streamId, state, message) => this.sendAgentAudioState(streamId, state, message),
+    log: (summary, detail) => this.voiceLog('tts', 'info', summary, detail),
+    onAsyncActiveChange: () => this.syncCapture(),
+    enabled: () => this.ttsSettings.agentSpeechEnabled,
+  });
   /** Server called done(); re-arm only after all queued speech finishes. */
   private turnCompletionPending = false;
   private pendingTtsInterrupt: TtsInterruptSnapshot | null = null;
@@ -191,6 +209,7 @@ export class LlmIntelligenceSession {
     private readonly appToken: string,
     private readonly cb: SessionCallbacks,
   ) {
+    this.ttsPile.setOnDiscard((lines) => this.agentAudio.discardLines(lines));
     this.ttsPile.setOnActiveChange((active) => {
       this.ttsSpeaking = active;
       this.cb.onSpeaking(active);
@@ -443,6 +462,7 @@ export class LlmIntelligenceSession {
     this.ownsSharedMic = false;
     stopAllTts();
     stopServerTts();
+    this.agentAudio.stopAll();
     this.ttsPile.interrupt();
     this.ws?.close();
     this.ws = null;
@@ -1238,7 +1258,7 @@ export class LlmIntelligenceSession {
 
   private syncCapture(): void {
     // Never stream the agent's own voice back to it (or anything while muted).
-    this.streamPipe?.setPaused(this.micMuted || this.ttsSpeaking);
+    this.streamPipe?.setPaused(this.micMuted || this.ttsSpeaking || this.agentAudio.asyncActive);
     if (this.sttGate.isPaused()) {
       if (this.stt instanceof WebkitSttSession) this.stt.pause();
       if (this.vadListening) this.vadDetector?.pause();
@@ -1329,6 +1349,10 @@ export class LlmIntelligenceSession {
         }
         break;
       }
+
+      case 'agent_audio':
+        this.agentAudio.handle(msg);
+        break;
 
       case 'narration': {
         /**
@@ -1534,6 +1558,7 @@ export class LlmIntelligenceSession {
   }
 
   private async playSpeakUtterance(text: string, ctx: TtsPlayContext): Promise<void> {
+    if (this.agentAudio.isStreamLine(text)) return this.agentAudio.playQueued(text, ctx);
     const provider = this.ttsProviderLabel();
     this.voiceLog('tts', 'info', `${provider} start`, text.slice(0, 80));
     const webkitOpts = {
@@ -1686,6 +1711,13 @@ export class LlmIntelligenceSession {
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utter);
     });
+  }
+
+  /** What an agent audio stream is doing here, for the agent's stream log. */
+  private sendAgentAudioState(streamId: string, state: AgentAudioState, message?: string): void {
+    if (state === 'error') this.voiceLog('tts', 'warn', 'Agent audio failed', message);
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'agent_audio_state', stream_id: streamId, state, ...(message ? { message } : {}) }));
   }
 
   private notifySpeakingState(speaking: boolean): void {

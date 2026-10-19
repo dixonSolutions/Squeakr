@@ -80,7 +80,8 @@ export function parseWavHeader(buf: Buffer): WavInfo | null {
 // ── Converter ────────────────────────────────────────────────────────────
 
 /**
- * Interleaved samples at any rate/channel count → mono PCM16LE at 16 kHz.
+ * Interleaved samples at any rate/channel count → mono PCM16LE at 16 kHz (or
+ * `targetRate` — agent audio streams play at 24 kHz, docs/47).
  * Downmix averages channels; resampling is linear interpolation, with the
  * fractional read position carried across chunks so there are no seams.
  */
@@ -97,16 +98,17 @@ export class PcmConverter {
   constructor(
     private readonly format: PcmFormat,
     private readonly encoding: 'int16' | 'float32' = 'int16',
+    private readonly targetRate = TARGET_RATE,
   ) {
     if (format.sampleRate <= 0 || format.channels <= 0) throw new Error('invalid PCM format');
     this.bytesPerSample = encoding === 'int16' ? 2 : 4;
     this.frameBytes = this.bytesPerSample * format.channels;
-    this.step = format.sampleRate / TARGET_RATE;
+    this.step = format.sampleRate / targetRate;
   }
 
-  /** True when input already is mono PCM16 at 16 kHz — bytes pass through untouched. */
+  /** True when input already is mono PCM16 at the target rate — bytes pass through untouched. */
   get isPassthrough(): boolean {
-    return this.encoding === 'int16' && this.format.channels === 1 && this.format.sampleRate === TARGET_RATE;
+    return this.encoding === 'int16' && this.format.channels === 1 && this.format.sampleRate === this.targetRate;
   }
 
   push(chunk: Buffer): Buffer {
