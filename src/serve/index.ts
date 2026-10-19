@@ -1087,12 +1087,24 @@ export async function runServeAction(action: ServeActionId): Promise<ServeAction
  * or null when neither has any entries. That is the normal case for an npm
  * install or a manual `node dist/index.js`, where the session .log file is the
  * only record (see logging/sessionLog.ts).
+ *
+ * The unit only counts when this process is its current run: some of its
+ * entries carry our INVOCATION_ID. Otherwise a second install, a dev bridge
+ * or a test instance would show another bridge's journal as its own. Children
+ * of any unit inherit INVOCATION_ID, so its presence alone proves nothing;
+ * distrobox-enter passes it into the container unchanged.
  */
-async function journalctlUnitArgs(): Promise<string[] | null> {
+export async function journalctlUnitArgs(
+  env: NodeJS.ProcessEnv = process.env,
+  run: typeof runCommand = runCommand,
+): Promise<string[] | null> {
+  const invocation = env['INVOCATION_ID']?.trim();
+  if (!invocation || !/^[0-9a-f]{32}$/.test(invocation)) return null;
   for (const unitArgs of [['--user', '-u', SERVICE_UNIT], ['-u', SERVICE_UNIT]]) {
     try {
-      const probe = await runCommand(process.cwd(), 'journalctl', [
+      const probe = await run(process.cwd(), 'journalctl', [
         ...unitArgs,
+        `_SYSTEMD_INVOCATION_ID=${invocation}`,
         '-n',
         '1',
         '--no-pager',
