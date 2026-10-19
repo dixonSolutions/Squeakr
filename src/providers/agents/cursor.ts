@@ -664,6 +664,8 @@ export const cursorProvider: AgentProvider = {
   buildVoiceArgs,
 
   supportedModes: (): readonly AgentMode[] => ['agent', 'plan', 'ask', 'debug'],
+  // Cursor's agent accepts images returned by MCP tools.
+  mediaInput: () => ({ mcpImageResults: true, note: 'Pictures go straight into the chat as images.' }),
   parseStreamEvent: parseCursorEvent,
   ensureMcpRegistration: ensureCursorMcpRegistration,
   sessionStatus: cursorSessionStatus,

@@ -58,6 +58,17 @@
           (click)="openTextDialog()">
           <i class="pi pi-pencil" aria-hidden="true"></i>
         </button>
+        <button
+          type="button"
+          class="cv-text-orb-btn cv-media-orb-btn"
+          aria-label="Send files or a voice memo to the agent"
+          title="Send files"
+          (click)="openMediaPicker()">
+          <i class="pi pi-paperclip" aria-hidden="true"></i>
+          @if (media.items().length > 0) {
+            <span class="cv-media-orb-count">{{ media.items().length }}</span>
+          }
+        </button>
       }
       @if (voiceSession.modelDownload(); as download) {
         <p class="cv-voice-preparing-label" aria-live="polite">Preparing</p>
@@ -383,7 +394,7 @@
   [draggable]="false"
   [resizable]="false"
   [style]="{ width: 'min(44rem, 94vw)' }">
-  <div class="cv-markdown-editor">
+  <div class="cv-markdown-editor" [class.cv-markdown-editor--with-media]="media.hasItems()">
     <label for="typed-message">Request in Markdown</label>
     <textarea
       pTextarea
@@ -396,6 +407,82 @@
     <small>Markdown supported · Ctrl/⌘ + Enter to send</small>
   </div>
 
+  <!-- docs/46: images, video and recordings for the agent. -->
+  <div class="cv-media-tray" aria-label="Files for the agent">
+    <div class="cv-media-tray-actions">
+      <p-button
+        label="Add files"
+        icon="pi pi-paperclip"
+        severity="secondary"
+        [outlined]="true"
+        size="small"
+        (onClick)="pickMediaFiles()" />
+      <p-button
+        [label]="recordLabel()"
+        [icon]="media.recording() ? 'pi pi-stop-circle' : 'pi pi-microphone'"
+        [severity]="media.recording() ? 'danger' : 'secondary'"
+        [outlined]="!media.recording()"
+        size="small"
+        (onClick)="toggleMemoRecording()" />
+    </div>
+
+    @if (media.hasItems()) {
+      <ul class="cv-media-list">
+        @for (item of media.items(); track item.key) {
+          <li class="cv-media-item" [class.cv-media-item--failed]="item.state === 'failed'">
+            @if (item.previewUrl) {
+              <img class="cv-media-thumb" [src]="item.previewUrl" alt="" />
+            } @else {
+              <span class="cv-media-thumb cv-media-thumb--icon" aria-hidden="true">
+                <i
+                  class="pi"
+                  [class.pi-video]="item.kind === 'video'"
+                  [class.pi-microphone]="item.kind === 'audio'"
+                  [class.pi-file]="item.kind === 'file' || item.kind === 'image'"></i>
+              </span>
+            }
+            <span class="cv-media-meta">
+              <span class="cv-media-name">{{ item.name }}</span>
+              <small class="cv-media-status">{{ media.describe(item) }}</small>
+              @if (item.asset?.transcript; as transcript) {
+                <small class="cv-media-transcript">“{{ transcript }}”</small>
+              }
+            </span>
+            <p-button
+              icon="pi pi-times"
+              [text]="true"
+              [rounded]="true"
+              size="small"
+              [attr.aria-label]="'Remove ' + item.name"
+              (onClick)="media.remove(item.key)" />
+          </li>
+        }
+      </ul>
+
+      <div class="cv-media-options">
+        <p-selectbutton
+          [options]="mediaModeOptions"
+          optionLabel="label"
+          optionValue="value"
+          [ngModel]="media.mode()"
+          (ngModelChange)="media.setMode($event)"
+          [allowEmpty]="false"
+          aria-label="Send as a new turn or attach to the current one" />
+        <p-selectbutton
+          [options]="mediaDeliveryOptions"
+          optionLabel="label"
+          optionValue="value"
+          [ngModel]="media.delivery()"
+          (ngModelChange)="media.setDelivery($event)"
+          [allowEmpty]="false"
+          aria-label="Give the agent the file path, or put pictures straight into its chat" />
+        @if (media.delivery() === 'inline' && media.inlineNote()) {
+          <small class="cv-media-note">{{ media.inlineNote() }}</small>
+        }
+      </div>
+    }
+  </div>
+
   <div class="cv-markdown-dialog-actions">
     <p-button
       label="Close"
@@ -406,10 +493,20 @@
     <p-button
       label="Send"
       icon="pi pi-send"
-      [disabled]="!typedMessage.trim() || !canSendTextTurn()"
+      [loading]="media.sending()"
+      [disabled]="!canSendRequest()"
       (onClick)="sendTypedMessage()" />
   </div>
 </p-dialog>
+
+<!-- Outside the dialog so the attach button can open the picker in the same tap. -->
+<input
+  #mediaInput
+  type="file"
+  class="cv-media-input"
+  multiple
+  [accept]="mediaAccept"
+  (change)="onMediaPicked($event)" />
 
 <cv-approval-panel />
 <cv-auth-card />

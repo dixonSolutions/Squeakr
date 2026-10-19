@@ -248,6 +248,14 @@ export interface AgentProvider {
    */
   ensureMcpRegistration(ctx: McpRegistrationContext): Promise<McpRegistrationResult>;
 
+  /**
+   * How this CLI takes files the user uploads from the phone (docs/46).
+   * Uploads always reach the agent by path; this says whether `inline`
+   * delivery — pictures as image blocks in a Squeakr tool result — reaches
+   * the model too, or has to fall back to the path.
+   */
+  mediaInput(): MediaInputSupport;
+
   /** Optional `about`/version probe — not every CLI has an equivalent. */
   getAbout?(): Promise<AgentAbout | null>;
 
@@ -300,6 +308,14 @@ export interface AgentProvider {
    * declares it by leaving this undefined.
    */
   forkSessionArgs?(project: Project, sessionId: string, prompt: string): string[] | null;
+}
+
+/** What a CLI does with uploaded media — see `AgentProvider.mediaInput`. */
+export interface MediaInputSupport {
+  /** The CLI hands image blocks from MCP tool results to its model. */
+  mcpImageResults: boolean;
+  /** One line for the phone: how pictures reach this CLI. */
+  note: string;
 }
 
 /**

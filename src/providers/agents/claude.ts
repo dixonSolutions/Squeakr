@@ -800,6 +800,8 @@ export const claudeProvider: AgentProvider = {
   permissionModes: () => CLAUDE_PERMISSION_MODES,
 
   supportedModes: (): readonly AgentMode[] => ['agent', 'plan', 'ask'],
+  // Verified live: a Squeakr tool result's image block reaches the model.
+  mediaInput: () => ({ mcpImageResults: true, note: 'Pictures go straight into the chat as images.' }),
   parseStreamEvent: parseClaudeEvent,
   ensureMcpRegistration: ensureClaudeMcpRegistration,
   sessionStatus: claudeSessionStatus,

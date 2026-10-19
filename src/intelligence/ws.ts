@@ -26,6 +26,8 @@ import { getConfig } from '../config.js';
 import { getActiveProvider } from '../providers/agents/registry.js';
 import type { WorkflowId } from '../config.js';
 import { childLogger } from '../log.js';
+import { composeTurnText } from '../media/delivery.js';
+import { resolveMediaIds } from '../media/store.js';
 import { getNarrator, PhoneRelaySession } from '../executor/narrator.js';
 import {
   describeSpeechInputChain,
@@ -249,8 +251,18 @@ export function registerWebSocket(app: FastifyInstance): void {
         }
 
         if (msg['type'] === 'user_turn') {
-          const text = typeof msg['text'] === 'string' ? msg['text'].trim() : '';
-          if (!text || !intelSession) return;
+          const typed = typeof msg['text'] === 'string' ? msg['text'].trim() : '';
+          // Uploads sent with the turn (docs/46): ids from POST /api/media.
+          const mediaIds = Array.isArray(msg['media_ids'])
+            ? (msg['media_ids'] as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0).slice(0, 20)
+            : [];
+          const mediaDelivery = msg['media_delivery'] === 'inline' ? 'inline' : 'path';
+          if ((!typed && mediaIds.length === 0) || !intelSession) return;
+          // The cascade workflow reads text only — it gets the paths and transcripts written in.
+          const text =
+            mediaIds.length > 0 && intelSession.workflow !== 'agent_native'
+              ? composeTurnText(typed, resolveMediaIds(mediaIds).found, 'path')
+              : typed;
 
           log.info(
             { sessionKey, workflow: intelSession.workflow, textLen: text.length },
@@ -273,7 +285,13 @@ export function registerWebSocket(app: FastifyInstance): void {
 
             // Spawn-or-queue is shared with the desk surfaces (executor/agentTurns.ts).
             try {
-              submitAgentNativeTurn(text, { sessionKey, source: 'phone', isInterrupt, ttsInterrupt });
+              submitAgentNativeTurn(text, {
+                sessionKey,
+                source: 'phone',
+                isInterrupt,
+                ttsInterrupt,
+                ...(mediaIds.length > 0 ? { media: { ids: mediaIds, delivery: mediaDelivery } } : {}),
+              });
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
               const code = err instanceof TurnError ? err.code : 'ERROR';

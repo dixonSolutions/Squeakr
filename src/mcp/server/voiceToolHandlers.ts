@@ -440,6 +440,9 @@ export interface NextVoiceTurnResult {
   segments?: number;
   /** Streamed turns only: how to treat a turn that may be mid-thought. */
   stream_hint?: string;
+  /** Uploaded media in this turn (docs/46): ids for view_media, and how the user wants it delivered. */
+  media_ids?: string[];
+  media_delivery?: 'path' | 'inline';
   error?: string;
   message?: string;
   listener?: ListenerBlock;
@@ -545,6 +548,7 @@ export async function handleNextVoiceTurn(
       ? { segments: turn.segments ?? 1, stream_hint: STREAM_TURN_HINT }
       : {}),
     ...(turn.ttsInterrupt ? { tts_interrupt: turn.ttsInterrupt } : {}),
+    ...(turn.media ? { media_ids: turn.media.ids, media_delivery: turn.media.delivery } : {}),
     ...(reconnected ? { reconnected } : {}),
   });
 }

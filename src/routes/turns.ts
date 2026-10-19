@@ -1,7 +1,8 @@
 /**
  * Typed turns and agent state for desk clients.
  *
- *   POST /api/turns { text, is_interrupt? }  → spawn-or-queue (agent_native only)
+ *   POST /api/turns { text, is_interrupt?, media_ids?, media_delivery? }
+ *                                             → spawn-or-queue (agent_native only)
  *   GET  /api/agent/state                     → the same snapshot `/ws/events` sends on auth
  *   GET  /api/jobs?project=&limit=&status=    → job history (same rows as list_jobs_history)
  */
@@ -17,11 +18,18 @@ import { childLogger } from '../log.js';
 
 const log = childLogger('routes:turns');
 
-const TurnBody = z.object({
-  text: z.string().min(1).max(20_000),
-  is_interrupt: z.boolean().optional(),
-  source: z.string().max(40).optional(),
-});
+const TurnBody = z
+  .object({
+    text: z.string().max(20_000).default(''),
+    is_interrupt: z.boolean().optional(),
+    source: z.string().max(40).optional(),
+    /** Uploads from POST /api/media to send with this turn (docs/46). */
+    media_ids: z.array(z.string().min(1)).max(20).optional(),
+    media_delivery: z.enum(['path', 'inline']).optional(),
+  })
+  .refine((b) => b.text.trim().length > 0 || (b.media_ids?.length ?? 0) > 0, {
+    message: 'Send text, media_ids, or both',
+  });
 
 export async function registerTurnRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -55,16 +63,19 @@ export async function registerTurnRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
+      const { media_ids: mediaIds, media_delivery: mediaDelivery } = parsed.data;
       const delivery = submitAgentNativeTurn(parsed.data.text, {
         source: parsed.data.source ?? 'rest',
         isInterrupt: parsed.data.is_interrupt,
+        ...(mediaIds?.length ? { media: { ids: mediaIds, delivery: mediaDelivery ?? 'path' } } : {}),
       });
       return { ok: true, ...delivery };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const code = err instanceof TurnError ? err.code : 'ERROR';
       log.warn({ code, err: message }, 'turn rejected');
-      return reply.code(code === 'NO_PROJECT' ? 409 : 500).send({ error: message, code });
+      const status = code === 'NO_PROJECT' ? 409 : code === 'MEDIA_GONE' ? 410 : code === 'EMPTY' ? 400 : 500;
+      return reply.code(status).send({ error: message, code });
     }
   });
 

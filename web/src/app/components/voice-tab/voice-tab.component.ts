@@ -36,6 +36,8 @@ import { LogService } from '../../services/log.service';
 import { AgentProviderService, effortLabel, type ModelSelection } from '../../services/agent-provider.service';
 import { VoiceProvidersService } from '../../services/voice-providers.service';
 import { VoiceSessionService } from '../../services/voice-session.service';
+import { MediaService, type MediaDelivery, type MediaMode } from '../../services/media.service';
+import { MEDIA_ACCEPT } from '../../../media-upload.js';
 import { ApprovalPanelComponent } from '../approval-panel/approval-panel.component';
 import { AuthCardComponent } from '../auth-card/auth-card.component';
 import { ImageCarouselComponent } from '../image-carousel/image-carousel.component';
@@ -137,6 +139,18 @@ export class VoiceTabComponent {
   protected readonly bridge = inject(BridgeService);
   protected readonly appState = inject(AppStateService);
   protected readonly voiceSession = inject(VoiceSessionService);
+  /** Files and voice memos for the agent (docs/46). */
+  protected readonly media = inject(MediaService);
+  protected readonly mediaAccept = MEDIA_ACCEPT;
+  protected readonly mediaModeOptions: { label: string; value: MediaMode }[] = [
+    { label: 'New turn', value: 'turn' },
+    { label: 'Attach to current', value: 'attach' },
+  ];
+  protected readonly mediaDeliveryOptions: { label: string; value: MediaDelivery }[] = [
+    { label: 'By path', value: 'path' },
+    { label: 'Into chat', value: 'inline' },
+  ];
+  private readonly mediaInput = viewChild<ElementRef<HTMLInputElement>>('mediaInput');
   protected readonly voiceProviders = inject(VoiceProvidersService);
   protected readonly agentProviders = inject(AgentProviderService);
   private readonly toast = inject(ToastService);
@@ -893,15 +907,50 @@ export class VoiceTabComponent {
 
   protected async sendTypedMessage(): Promise<void> {
     const text = this.typedMessage.trim();
-    if (!text || !this.canSendTextTurn()) return;
-    const sent = await this.voiceSession.sendTextMessage(text);
+    if (!this.canSendRequest()) return;
+    // Files go with the text (or on their own); plain text takes the same path.
+    const sent = await this.media.send(text);
     if (!sent) return;
     this.typedMessage = '';
     this.textDialogVisible = false;
   }
 
+  /** Text, ready files, or both — and nothing still uploading. */
+  protected canSendRequest(): boolean {
+    if (!this.canSendTextTurn() || this.media.busy() || this.media.sending() || this.media.recording()) return false;
+    return this.typedMessage.trim().length > 0 || this.media.readyIds().length > 0;
+  }
+
   protected openTextDialog(): void {
+    void this.media.refreshCapabilities();
     this.textDialogVisible = true;
+  }
+
+  /** The attach button: open the request dialog straight onto the file picker. */
+  protected openMediaPicker(): void {
+    this.openTextDialog();
+    this.mediaInput()?.nativeElement.click();
+  }
+
+  protected pickMediaFiles(): void {
+    this.mediaInput()?.nativeElement.click();
+  }
+
+  protected onMediaPicked(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    this.media.addFiles(input.files);
+    input.value = '';
+  }
+
+  protected toggleMemoRecording(): void {
+    if (this.media.recording()) this.media.stopRecording();
+    else void this.media.startRecording();
+  }
+
+  protected recordLabel(): string {
+    if (!this.media.recording()) return 'Record memo';
+    const s = this.media.recordSeconds();
+    return `Stop ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
 
   protected closeTextDialog(): void {

@@ -69,6 +69,13 @@ import {
 } from './browser-tts-settings.js';
 
 /** How much of the agent's work is read aloud beyond its actual replies. */
+
+/** Uploaded media sent with a typed turn (docs/46). */
+export interface TurnMediaRef {
+  ids: string[];
+  delivery: 'path' | 'inline';
+}
+
 export type ReadAloudMode = 'replies' | 'titles' | 'summary' | 'everything';
 
 export interface VoiceTtsSettings {
@@ -458,9 +465,10 @@ export class LlmIntelligenceSession {
    * Always enqueues while the session is live (agent_native queues behind a running agent).
    * @returns false when the turn could not be sent (caller should keep the draft).
    */
-  sendTextTurn(text: string): boolean {
+  sendTextTurn(text: string, media?: TurnMediaRef): boolean {
     const trimmed = text.trim();
-    if (!trimmed || this.closed) return false;
+    const hasMedia = (media?.ids.length ?? 0) > 0;
+    if ((!trimmed && !hasMedia) || this.closed) return false;
     if (!this.wsConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.cb.onSttError?.('Not connected — tap the orb to start a session.');
       return false;
@@ -472,8 +480,10 @@ export class LlmIntelligenceSession {
     // Typed turns get the same send cue as spoken ones — submitting a message
     // should sound the same whichever way you wrote it.
     playVoiceCueNow('sent');
-    this.cb.onUserTranscript(trimmed);
-    this.sendUserTurn(trimmed);
+    const files = media?.ids.length ?? 0;
+    const note = files > 0 ? `[${files} file${files === 1 ? '' : 's'} attached]` : '';
+    this.cb.onUserTranscript([trimmed, note].filter(Boolean).join(' '));
+    this.sendUserTurn(trimmed, media);
     return true;
   }
 
@@ -1214,7 +1224,7 @@ export class LlmIntelligenceSession {
     this.voiceLog('stt', 'info', `${this.sttProviderLabel()} partial`, trimmed.slice(0, 120));
   }
 
-  private sendUserTurn(text: string): void {
+  private sendUserTurn(text: string, media?: TurnMediaRef): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     if (this.ttsPile.isBargeInPaused()) {
@@ -1227,6 +1237,11 @@ export class LlmIntelligenceSession {
     }
 
     const payload: Record<string, unknown> = { type: 'user_turn', text };
+    // Uploads sent with this turn (docs/46) — already on the bridge, by id.
+    if (media && media.ids.length > 0) {
+      payload['media_ids'] = media.ids;
+      payload['media_delivery'] = media.delivery;
+    }
     if (this.pendingTtsInterrupt) {
       payload['tts_interrupt'] = this.pendingTtsInterrupt;
       this.pendingTtsInterrupt = null;

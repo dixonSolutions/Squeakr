@@ -709,6 +709,8 @@ export const codexProvider: AgentProvider = {
 
   // Codex has no plan mode; `ask` is enforced with a read-only sandbox.
   supportedModes: (): readonly AgentMode[] => ['agent', 'ask'],
+  // Codex turns MCP image content into input images for the model.
+  mediaInput: () => ({ mcpImageResults: true, note: 'Pictures go straight into the chat as images.' }),
   parseStreamEvent: parseCodexEvent,
   ensureMcpRegistration: ensureCodexMcpRegistration,
   sessionStatus: codexSessionStatus,

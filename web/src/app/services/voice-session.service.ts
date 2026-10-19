@@ -24,7 +24,7 @@ import {
   playConnectDing,
 } from '../../sound-effects.js';
 import { loadVoskModel } from '../../vosk-model-cache.js';
-import type { AudioBackendSummary } from '../../llm-intelligence-session.js';
+import type { AudioBackendSummary, TurnMediaRef } from '../../llm-intelligence-session.js';
 import {
   onModelDownload,
   prefetchVoiceModels,
@@ -193,6 +193,16 @@ export class VoiceSessionService {
     if (this._session instanceof LlmIntelligenceSession) {
       this._session.setMicMuted(next);
     }
+  }
+
+  /**
+   * Pause voice capture while the user records a memo to send as a file
+   * (docs/46) — otherwise the session would also hear it as a spoken turn.
+   * Temporary: the user's own mute preference is left alone and restored.
+   */
+  holdMicForRecording(hold: boolean): void {
+    if (!(this._session instanceof LlmIntelligenceSession)) return;
+    this._session.setMicMuted(hold || this._micMuted());
   }
 
   /** Discard capture or in-flight transcription without hanging up the session. */
@@ -486,9 +496,9 @@ export class VoiceSessionService {
   }
 
   /** Typed message for cascade workflows — same turn path as voice (queued while agent runs). */
-  async sendTextMessage(text: string): Promise<boolean> {
+  async sendTextMessage(text: string, media?: TurnMediaRef): Promise<boolean> {
     const trimmed = text.trim();
-    if (!trimmed) return false;
+    if (!trimmed && !(media && media.ids.length > 0)) return false;
 
     if (!this._session) {
       // Joins an in-flight start rather than racing past it.
@@ -496,7 +506,7 @@ export class VoiceSessionService {
     }
     const session = this._session;
     if (session instanceof LlmIntelligenceSession) {
-      return session.sendTextTurn(trimmed);
+      return session.sendTextTurn(trimmed, media);
     }
     // startSession() already said why it could not connect (no project, prepare
     // failed). Telling the user to tap the orb on top of that is just noise.
