@@ -1,0 +1,313 @@
+// Config → Audio & devices (docs/49). Theme tokens only, so light/dark and
+// every accent tone come for free; laid out for a phone first.
+
+:host { display: block; }
+
+.cv-audio {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.cv-audio-intro {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--p-text-muted-color);
+
+  .pi { margin-top: 0.15rem; color: var(--p-primary-color); }
+}
+
+.cv-audio-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--p-content-border-color);
+  border-radius: 14px;
+  background: var(--p-content-background);
+}
+
+.cv-audio-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+
+  > div { flex: 1; min-width: 0; }
+
+  h3 { margin: 0; font-size: 1.05rem; font-weight: 650; }
+
+  p { margin: 0.15rem 0 0; font-size: 0.85rem; color: var(--p-text-muted-color); }
+}
+
+.cv-audio-step {
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--p-primary-contrast-color, #fff);
+  background: var(--p-primary-color);
+}
+
+.cv-audio-icon-btn {
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: var(--p-text-muted-color);
+  background: transparent;
+
+  &:hover:not(:disabled) {
+    color: var(--p-text-color);
+    background: color-mix(in srgb, var(--p-text-muted-color) 14%, transparent);
+  }
+
+  &:disabled { opacity: 0.35; cursor: default; }
+
+  &:focus-visible { outline: 2px solid var(--p-focus-ring-color, var(--p-primary-color)); }
+
+  &.cv-spin .pi { animation: cv-audio-spin 0.9s linear infinite; }
+}
+
+@keyframes cv-audio-spin { to { transform: rotate(360deg); } }
+
+.cv-audio-field-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--p-text-muted-color);
+  margin-bottom: -0.4rem;
+}
+
+:host ::ng-deep .cv-audio-select { width: 100%; }
+
+.cv-audio-dev {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+
+  .pi { flex: none; color: var(--p-primary-color); }
+}
+
+.cv-audio-dev-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cv-audio-dev-kind {
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  color: var(--p-text-muted-color);
+  background: color-mix(in srgb, var(--p-text-muted-color) 14%, transparent);
+}
+
+.cv-audio-callout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  background: color-mix(in srgb, var(--p-primary-color) 8%, transparent);
+
+  > span { flex: 1 1 14rem; }
+
+  &--info {
+    align-items: flex-start;
+    flex-wrap: nowrap;
+
+    .pi { margin-top: 0.15rem; color: var(--p-primary-color); }
+  }
+}
+
+// ── Level meter ────────────────────────────────────────────────────────────
+
+.cv-audio-meter {
+  position: relative;
+  height: 0.85rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--p-text-muted-color) 16%, transparent);
+  opacity: 0.6;
+  transition: opacity 0.2s;
+
+  &--on { opacity: 1; }
+}
+
+.cv-audio-meter-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  // Green for speech, amber getting hot, red near clipping.
+  background: linear-gradient(
+    90deg,
+    var(--p-green-500, #22c55e) 0%,
+    var(--p-green-500, #22c55e) 70%,
+    var(--p-yellow-500, #eab308) 85%,
+    var(--p-red-500, #ef4444) 100%
+  );
+}
+
+.cv-audio-meter-peak {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--p-text-color);
+  opacity: 0.7;
+}
+
+// Faint markers for the band where normal speech should land (50–80 %).
+.cv-audio-meter-zones {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+
+  i {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: color-mix(in srgb, var(--p-text-color) 25%, transparent);
+  }
+
+  i:nth-child(1) { left: 50%; }
+  i:nth-child(2) { left: 80%; }
+  i:nth-child(3) { left: 95%; }
+}
+
+.cv-audio-meter-caption {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 1.2rem;
+  font-size: 0.8rem;
+  color: var(--p-text-muted-color);
+}
+
+.cv-audio-rec-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--p-red-500, #ef4444);
+  animation: cv-audio-pulse 1s ease-in-out infinite;
+}
+
+@keyframes cv-audio-pulse { 50% { opacity: 0.25; } }
+
+.cv-audio-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+
+  // Full-width, thumb-sized buttons on a phone.
+  > * { flex: 1 1 10rem; }
+
+  :host ::ng-deep & .p-button { width: 100%; }
+}
+
+.cv-audio-note {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--p-text-muted-color);
+}
+
+// ── Speech test ────────────────────────────────────────────────────────────
+
+.cv-audio-test {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-top: 0.25rem;
+  padding: 0.9rem;
+  border-radius: 12px;
+  border: 1px dashed var(--p-content-border-color);
+  background: color-mix(in srgb, var(--p-text-muted-color) 5%, transparent);
+  transition: border-color 0.2s, background 0.2s;
+
+  &--live {
+    border-style: solid;
+    border-color: var(--p-primary-color);
+    background: color-mix(in srgb, var(--p-primary-color) 7%, transparent);
+  }
+}
+
+.cv-audio-test-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.cv-audio-test-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 650;
+
+  .pi { color: var(--p-primary-color); }
+}
+
+.cv-audio-test-text {
+  margin: 0;
+  padding: 0 0 0 0.75rem;
+  border-left: 3px solid color-mix(in srgb, var(--p-primary-color) 45%, transparent);
+  font-size: 0.88rem;
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--p-text-color);
+}
+
+.cv-audio-test-progress {
+  height: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--p-text-muted-color) 16%, transparent);
+
+  div {
+    height: 100%;
+    background: var(--p-primary-color);
+    transition: width 120ms linear;
+  }
+}
+
+.cv-audio-test-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+
+  > p-button { flex: 1 1 9rem; }
+
+  :host ::ng-deep & > p-button .p-button { width: 100%; }
+}
+
+.cv-audio-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+}

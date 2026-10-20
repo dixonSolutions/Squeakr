@@ -31,9 +31,16 @@
  *     required after every launch. The orb tap is that gesture.
  *
  * The native shell (docs/20) is the only way to get OS-level persistence.
+ *
+ * Which microphone: the one picked in Config → Audio & devices (docs/49), as
+ * an `ideal` deviceId so a headset that has since been unplugged falls back
+ * to the system default instead of failing. On iOS, picking the Bluetooth
+ * headset's microphone also moves playback to its hands-free profile — that
+ * is the OS, not this code.
  */
 
 import { MIC_MEDIA_CONSTRAINTS } from './audio.js';
+import { getAudioPrefs } from './audio-prefs.js';
 
 export type MicPermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported';
 
@@ -127,11 +134,9 @@ export async function acquireMic(): Promise<MicLease> {
 
   if (!stream || !isStreamLive(stream)) {
     // Concurrent callers share one getUserMedia call; two would be two prompts.
-    pending ??= navigator.mediaDevices
-      .getUserMedia({ audio: MIC_MEDIA_CONSTRAINTS, video: false })
-      .finally(() => {
-        pending = null;
-      });
+    pending ??= openMicrophone().finally(() => {
+      pending = null;
+    });
     stream = await pending;
   }
 
@@ -149,6 +154,49 @@ export async function acquireMic(): Promise<MicLease> {
       if (leases === 0) scheduleRelease();
     },
   };
+}
+
+/** Audio constraints for the chosen microphone (system default when none is chosen). */
+export function micConstraintsFor(deviceId: string | null): MediaTrackConstraints {
+  return deviceId ? { ...MIC_MEDIA_CONSTRAINTS, deviceId: { ideal: deviceId } } : MIC_MEDIA_CONSTRAINTS;
+}
+
+async function openMicrophone(): Promise<MediaStream> {
+  const deviceId = getAudioPrefs().inputDeviceId;
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: micConstraintsFor(deviceId), video: false });
+  } catch (err) {
+    // `ideal` should never over-constrain, but some engines treat a stale id
+    // as fatal. A permission refusal is not retried — that would prompt twice.
+    const name = (err as { name?: string } | null)?.name;
+    if (!deviceId || (name !== 'OverconstrainedError' && name !== 'NotFoundError')) throw err;
+    return navigator.mediaDevices.getUserMedia({ audio: MIC_MEDIA_CONSTRAINTS, video: false });
+  }
+}
+
+/** deviceId the shared stream is actually using, if open. */
+export function currentMicDeviceId(): string | null {
+  const track = currentMicStream()?.getAudioTracks()[0];
+  return track?.getSettings?.().deviceId ?? null;
+}
+
+/**
+ * The user picked a different microphone. An idle stream is dropped so the
+ * next borrower opens the new device; a stream in use cannot be swapped under
+ * its audio graphs, so the caller is told a restart is needed.
+ */
+export function onMicDeviceChosen(): { restartNeeded: boolean } {
+  if (!stream) return { restartNeeded: false };
+  if (leases === 0) {
+    releaseMicNow();
+    return { restartNeeded: false };
+  }
+  return { restartNeeded: true };
+}
+
+/** Borrowers holding the shared stream right now. */
+export function micLeaseCount(): number {
+  return leases;
 }
 
 /** The live shared stream, if one is already open. */

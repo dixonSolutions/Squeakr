@@ -118,19 +118,13 @@
               placeholder="cancel" [disabled]="!isBridgeConnected() || !wakeWordsEnabled" />
             <label for="cfg-wake-cancel">Cancel phrase</label>
           </p-iftalabel>
-          <p-iftalabel>
-            <p-inputNumber id="cfg-wake-confidence" [(ngModel)]="wakeConfidencePercent"
-              [min]="0" [max]="100" [step]="5" suffix="%" [disabled]="!isBridgeConnected() || !wakeWordsEnabled" />
-            <label for="cfg-wake-confidence">Wake confidence threshold</label>
-          </p-iftalabel>
-          <p-iftalabel>
-            <p-select id="cfg-wake-confidence-presets" [(ngModel)]="wakeConfidencePercent"
-              [options]="wakeConfidencePresets" optionLabel="label" optionValue="value"
-              placeholder="Choose preset" [disabled]="!isBridgeConnected() || !wakeWordsEnabled" />
-            <label for="cfg-wake-confidence-presets">Presets</label>
-          </p-iftalabel>
+          <cv-level-slider inputId="cfg-wake-sensitivity" label="Wake sensitivity" icon="pi-sliders-h"
+            [value]="wakeSensitivity" (valueChange)="wakeSensitivity = $event"
+            [valueLabel]="wakeSensitivityText" [hint]="wakeSensitivityHint"
+            minLabel="Strict" maxLabel="Sensitive"
+            [disabled]="!isBridgeConnected() || !wakeWordsEnabled" />
           <p-message severity="secondary" variant="simple"
-            text="Minimum Vosk word confidence (0–100%) to accept the wake phrase. Below 55% also enables partial recognition for faster response; higher values reduce false activations." />
+            text="How sure the offline spotter must be that it heard the wake phrase (shown as the minimum confidence). Saved with the voice settings below; the Wake word test uses the saved value." />
         </p-fieldset>
 
         <p-fieldset legend="On-screen controls">
@@ -304,6 +298,13 @@
   @if (activeSection() === 'speech') {
     <div class="cv-cfg-detail">
       <cv-speech-tab />
+    </div>
+  }
+
+  <!-- ── Audio & devices (this device only) ── -->
+  @if (activeSection() === 'audio') {
+    <div class="cv-cfg-detail">
+      <cv-audio-settings />
     </div>
   }
 
