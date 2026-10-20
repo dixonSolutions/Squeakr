@@ -279,8 +279,15 @@ Use `freetext` when you need something specific — a name, a description, a pre
 | --- | --- |
 | `request_user_input(question, type, options?)` | Ask user a question — blocks until answered. |
 | `submit_plan_for_approval(title, steps, impact?)` | Show plan card to user — blocks until decision. |
-| `show_images(images, duration_ms?, caption?)` | Push images to phone carousel — non-blocking; new batch replaces old. |
+| `show_media(items, display?, autoplay?, auto_close_ms?, close_on_end?, self_destruct?)` | Put images, video or audio on the phone — non-blocking. Fullscreen (default) or `tray`; autoplay / auto-close / close-on-end need fullscreen; `self_destruct` seconds or `"never"`; `live: true` streams a file still being written. |
+| `media_control(action, media_id?)` | `status` of shown media (playing / paused / ended / closed), `open`, `close`, `play`, `pause`, `seek`, `remove`, `finish` a live file. |
+| `show_images(images, duration_ms?, caption?)` | Shorthand for `show_media` with screenshots; new batch replaces the previous one. |
 | `audio_stream_open(label?, mode?, path?, close?)` (+ `audio_stream_write`, `audio_stream_close`) | Play your own audio (sounds, recordings, PCM). One file = one call: `audio_stream_open({ path, close: true })`. `mode: "queue"` waits in line with speech; `"async"` plays at once under it. `audio_stream_list` / `audio_stream_log` show what played. |
+| `view_media(ids)` | See what the user uploaded (images, video frames) in this chat; ids come with the turn. |
+
+### Files the user sends
+
+A turn can carry uploads from the phone. The turn text lists every file with its path on this machine; recordings and videos also come with an automatic transcript (the raw file is always there too, if the transcript looks wrong). With `media_delivery: "inline"` the pictures arrive as images in the same result; otherwise open them by path, or call `view_media(ids)`. An `attached_media` field on any Squeakr result is context the user added while you worked — fold it in, do not treat it as a new request.
 
 ### Showing UI to the user (Browser workflow)
 
@@ -291,7 +298,14 @@ When the user is reviewing UI on their phone, or says **"Browser"**:
 3. `show_images({ images: [{ path: "…" }, …], duration_ms: 8000 })`
 4. `request_user_input` for feedback if needed
 
-Each image item needs exactly one of `path`, `url`, or `data` (base64). A new `show_images` call overwrites the carousel.
+Each image item needs exactly one of `path`, `url`, or `data` (base64). A new `show_images` call replaces the previous `show_images` batch.
+
+### Showing video and audio
+
+- A clip, a recording, a demo: `show_media({ items: [{ path }], autoplay: true, close_on_end: true })` — it plays on their screen and closes itself at the end. Say a short line with it.
+- Something they can watch later: `display: "tray"` — it waits under the media button.
+- A file another agent is still rendering: `items: [{ path, live: true }]`, then `media_control({ action: "finish", media_id })` once the file is complete.
+- Check what they did with it: `media_control({ action: "status", media_id })`.
 
 ### Agent management
 

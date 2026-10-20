@@ -7,6 +7,8 @@
  * and WhatsApp voice notes are Ogg/Opus files. This module converts between
  * the two without ffmpeg — Opus through `opusscript` (WASM, an optional
  * dependency loaded on first use), Ogg framing and resampling in plain code.
+ * Audio files people attach (FLAC, MP3, M4A…) go through `audio-decode`,
+ * JS/WASM and optional in the same way.
  */
 
 import { createRequire } from 'node:module';
@@ -211,6 +213,31 @@ export interface OpusHead {
 export function parseOpusHead(packet: Buffer): OpusHead {
   if (packet.toString('ascii', 0, 8) !== 'OpusHead') throw new Error('Not an Ogg/Opus file');
   return { channels: packet[9]!, preSkip: packet.readUInt16LE(10), inputRate: packet.readUInt32LE(12) };
+}
+
+/**
+ * An audio file someone attached — FLAC, MP3, M4A/AAC, WAV, Ogg, WebM… — as
+ * 16 kHz mono PCM16 for speech-to-text.
+ */
+export async function decodeAudioFileTo16k(file: Buffer): Promise<Buffer> {
+  type Decoded = { channelData: Float32Array[]; sampleRate: number };
+  let decode: (data: Uint8Array) => Promise<Decoded>;
+  try {
+    decode = ((await import('audio-decode')) as unknown as { default: typeof decode }).default;
+  } catch {
+    throw new Error('reading audio files needs the optional audio-decode package — reinstall Squeakr');
+  }
+  const { channelData, sampleRate } = await decode(new Uint8Array(file.buffer, file.byteOffset, file.byteLength));
+  const frames = channelData[0]?.length ?? 0;
+  if (!frames || !sampleRate) throw new Error('no audio in it');
+  const mono = Buffer.alloc(frames * 2);
+  for (let i = 0; i < frames; i++) {
+    let sum = 0;
+    for (const ch of channelData) sum += ch[i] ?? 0;
+    const v = Math.round((sum / channelData.length) * 32767);
+    mono.writeInt16LE(Math.max(-32768, Math.min(32767, v)), i * 2);
+  }
+  return resamplePcm16(mono, sampleRate, 16_000);
 }
 
 /** An Ogg/Opus voice note → 16 kHz mono PCM16 for speech-to-text. */

@@ -249,11 +249,15 @@ function resolveMcpEndpoint() {
 async function callTool(client, name, args = {}) {
   const res = await client.callTool({ name, arguments: args });
   const text = res.content?.find((c) => c.type === 'text')?.text ?? '{}';
+  let out;
   try {
-    return JSON.parse(text);
+    out = JSON.parse(text);
   } catch {
-    return { raw: text };
+    out = { raw: text };
   }
+  // How many pictures rode along (media pipe, docs/46) — not part of the JSON.
+  Object.defineProperty(out, 'imageBlocks', { value: (res.content ?? []).filter((c) => c.type === 'image').length });
+  return out;
 }
 
 async function runVoice() {
@@ -321,18 +325,34 @@ async function runVoice() {
  */
 async function runEchoVoice(client, bootTurn) {
   const maxTurns = Number(process.env.STUB_ECHO_TURNS ?? 6);
-  await callTool(client, 'speak', { text: `ECHO boot: ${bootTurn || '(none)'}` });
-  await callTool(client, 'done', {});
+  // Media attached to the conversation (docs/46) rides out on any Squeakr
+  // result; say so, so the harness can see it arrived.
+  const call = async (name, args) => {
+    const res = await callTool(client, name, args);
+    if (res.attached_media_ids) {
+      log(`echo: attached media ${JSON.stringify(res.attached_media_ids)} on ${name}`);
+      await callTool(client, 'speak', { text: `ATTACHED ${res.attached_media_ids.length} images=${res.imageBlocks} via ${name}` });
+    }
+    return res;
+  };
+  await call('speak', { text: `ECHO boot: ${bootTurn || '(none)'}` });
+  await call('done', {});
   for (let i = 0; i < maxTurns; i++) {
-    const res = await callTool(client, 'next_voice_turn', { timeout_ms: 15_000 });
+    const res = await call('next_voice_turn', { timeout_ms: 15_000 });
     if (!res.turn) {
       log('echo: no more turns');
       break;
     }
     const tag = `${res.source ?? 'voice'}${res.segments > 1 ? ` x${res.segments}` : ''}`;
     log(`echo: turn (${tag}) ${JSON.stringify(res.turn)} hint=${Boolean(res.stream_hint)}`);
-    await callTool(client, 'speak', { text: `ECHO ${tag}: ${res.turn}` });
-    await callTool(client, 'done', {});
+    // A turn asking for it holds the reply, leaving a window where the agent
+    // is busy and not polling — what a real agent mid-work looks like.
+    if (res.turn.includes('STUB_PAUSE')) await sleep(Number(process.env.STUB_PAUSE_MS ?? 3000));
+    const media = res.media_ids ? ` [media ${res.media_ids.length} ${res.media_delivery} images=${res.imageBlocks}]` : '';
+    // With media the turn text carries a file list; echo only what was typed.
+    const said = res.media_ids ? res.turn.split('\n')[0] : res.turn;
+    await call('speak', { text: `ECHO ${tag}: ${said}${media}` });
+    await call('done', {});
   }
   emitResult('stub echo session complete');
   await client.close();

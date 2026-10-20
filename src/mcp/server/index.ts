@@ -19,10 +19,12 @@
  *   Git          — agent_diff
  *   System       — agent_provider_info
  *   MCP inspect  — agent_mcp_list, agent_mcp_tools
+ *   Media out    — show_media, media_control (docs/48)
  *   Away policy  — agent_away_policy
  *   User display — show_images, send_files
  *   Audio out    — audio_stream_open, audio_stream_write, audio_stream_close,
  *                  audio_stream_list, audio_stream_log (docs/47)
+ *   User media   — view_media (uploads from the phone, docs/46)
  *   User interact — request_user_input, submit_plan_for_approval
  *
  * Deprecated aliases kept for one release (docs/40 §2): agent_submit →
@@ -74,6 +76,8 @@ import {
   handleInject,
 } from './sessionToolHandlers.js';
 import { handleShowImages } from './imageToolHandlers.js';
+import { handleShowMedia, handleMediaControl } from './displayToolHandlers.js';
+import { ShowMediaShape, MediaControlShape } from '../schemas.js';
 import { handleSendFiles } from './fileToolHandlers.js';
 import {
   handleAudioStreamOpen,
@@ -84,6 +88,8 @@ import {
   closeAgentAudioOwner,
 } from './audioStreamToolHandlers.js';
 import { voiceTurnQueue } from './turnQueue.js';
+import { handleViewMedia } from './mediaToolHandlers.js';
+import { turnImageBlocks } from '../../media/delivery.js';
 import {
   approvalPolicy,
   isListening,
@@ -195,7 +201,13 @@ function buildMcpServer(sessionKey: string): McpServer {
     },
     async ({ timeout_ms }) => {
       const result = await handleNextVoiceTurn({ timeout_ms });
-      return voiceToolResponse({ ...result });
+      const response = voiceToolResponse({ ...result });
+      // Pictures the user sent with this turn, straight into the chat (docs/46).
+      if (result.media_ids && result.media_delivery) {
+        const blocks = turnImageBlocks({ ids: result.media_ids, delivery: result.media_delivery });
+        (response.content as unknown[]).push(...blocks);
+      }
+      return response;
     },
   );
 
@@ -967,11 +979,49 @@ function buildMcpServer(sessionKey: string): McpServer {
   // ── User display ─────────────────────────────────────────────────────────
 
   server.tool(
+    'view_media',
+    'See files the user uploaded from their phone (images, video frames) as images in this chat, and read ' +
+      'recording transcripts. Turns that carry uploads list the ids. Raw files stay on disk at the listed paths; ' +
+      'this tool only shows them. Videos come back as still frames plus their sound transcript.',
+    {
+      ids: z.array(z.string().min(1)).min(1).max(12).describe('Media ids from the turn text or media_ids.'),
+    },
+    async ({ ids }) => handleViewMedia({ ids }),
+  );
+
+  server.tool(
+    'show_media',
+    'Put images, video or audio on the user\'s phone (non-blocking). ' +
+      'display "fullscreen" (default) opens the first item on their screen as the raw media with a close icon; "tray" adds it ' +
+      'quietly under the media button. autoplay, auto_close_ms and close_on_end only work with "fullscreen". ' +
+      'self_destruct: seconds until it is deleted (default 1800) or "never" (lives as long as the voice session). ' +
+      'live: true streams a file another agent is still writing (audio / video) — call media_control finish when it is done. ' +
+      'Items add to what is shown unless replace is true. Returns media_id per item for media_control. ' +
+      'Say a short line like "It\'s on your screen." with it.',
+    ShowMediaShape,
+    async (args) => {
+      if (!hasActiveVoiceSession()) {
+        return voiceToolResponse({ ok: false, error: 'NO_VOICE_SESSION', message: NO_VOICE_SESSION_ERROR });
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(handleShowMedia(args)) }] };
+    },
+  );
+
+  server.tool(
+    'media_control',
+    'Drive media shown with show_media: status (what is shown and the phone\'s playback — playing / paused / ended / closed, position), ' +
+      'open / close fullscreen, play / pause / seek, remove items now, or finish a live stream once its file is complete. ' +
+      'To close a video when it ends, prefer show_media close_on_end; otherwise poll status for state "ended" and close.',
+    MediaControlShape,
+    async (args) => ({ content: [{ type: 'text', text: JSON.stringify(handleMediaControl(args)) }] }),
+  );
+
+  server.tool(
     'show_images',
-    'Push images to the user\'s phone as a browsable carousel (non-blocking). ' +
+    'Push images to the user\'s phone (non-blocking) — shorthand for show_media with images. ' +
       'Use after browser snapshots or when the user needs to see UI. ' +
       'Each item needs exactly one of path (local file), url (http/https), or data (base64). ' +
-      'A new call replaces the previous carousel. ' +
+      'A new call replaces the previous show_images batch. ' +
       'Speak a short line like "I\'m showing that on your phone now." then call this tool.',
     {
       images: z
@@ -992,19 +1042,19 @@ function buildMcpServer(sessionKey: string): McpServer {
         )
         .min(1)
         .max(10)
-        .describe('Images to display — overwrites any previous carousel'),
+        .describe('Images to display — replaces the previous show_images batch'),
       duration_ms: z
         .number()
         .int()
         .min(3000)
         .max(120_000)
         .optional()
-        .describe('Expanded display time before minimizing to toggle (default 8000 ms)'),
+        .describe('Fullscreen time before closing to the media button (default 8000 ms)'),
       caption: z
         .string()
         .max(300)
         .optional()
-        .describe('Optional title above the carousel'),
+        .describe('Optional line for the batch'),
     },
     async (args) => {
       if (!hasActiveVoiceSession()) {
@@ -1569,5 +1619,5 @@ export function registerMcpServer(app: FastifyInstance): void {
     await reply.code(204).send();
   });
 
-  log.info('mcp server registered at /mcp (49 tools)');
+  log.info('mcp server registered at /mcp (52 tools)');
 }

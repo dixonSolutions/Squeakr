@@ -147,6 +147,52 @@ describe('ChannelHub', () => {
     assert.equal(readFileSync(path, 'utf8'), 'png!');
   });
 
+  /** A one-second 44.1 kHz stereo WAV — any audio file someone records and attaches. */
+  const wavFile = (): Buffer => {
+    const rate = 44_100;
+    const frames = rate;
+    const data = Buffer.alloc(frames * 4);
+    for (let i = 0; i < frames; i++) {
+      const v = Math.round(Math.sin((2 * Math.PI * 220 * i) / rate) * 8000);
+      data.writeInt16LE(v, i * 4);
+      data.writeInt16LE(v, i * 4 + 2);
+    }
+    const h = Buffer.alloc(44);
+    h.write('RIFF', 0);
+    h.writeUInt32LE(36 + data.length, 4);
+    h.write('WAVEfmt ', 8);
+    h.writeUInt32LE(16, 16);
+    h.writeUInt16LE(1, 20);
+    h.writeUInt16LE(2, 22);
+    h.writeUInt32LE(rate, 24);
+    h.writeUInt32LE(rate * 4, 28);
+    h.writeUInt16LE(4, 32);
+    h.writeUInt16LE(16, 34);
+    h.write('data', 36);
+    h.writeUInt32LE(data.length, 40);
+    return Buffer.concat([h, data]);
+  };
+
+  it('an attached recording is transcribed into the turn, after what was typed, and kept as a file', async () => {
+    const { hub, out, sent, submitted } = setup();
+    await hub.handle({ channel: 'telegram', user, conversation, text: 'stream on' }, out, CAPS);
+    const wav = wavFile();
+    const attachments = [{ name: 'Recording 8.wav', contentType: 'audio/wav', size: wav.length, fetch: async () => wav }];
+    await hub.handle({ channel: 'telegram', user, conversation, text: 'here', attachments }, out, CAPS);
+    assert.equal(submitted.length, 1);
+    assert.match(submitted[0]!, /^telegram: here\n\nRecording 8\.wav \(transcribed\): open the readme\n\nAttached audio: .*Recording_8\.wav$/);
+    assert.ok(sent.some((m) => m.includes('Recording 8.wav (transcribed): open the readme')), 'what it said is echoed back');
+  });
+
+  it('a recording on its own is a turn too, outside a stream', async () => {
+    const { hub, out, submitted } = setup();
+    const wav = wavFile();
+    const attachments = [{ name: 'memo.wav', contentType: 'audio/wav', size: wav.length, fetch: async () => wav }];
+    await hub.handle({ channel: 'telegram', user, conversation: { ...conversation, isDirect: true }, text: '', attachments }, out, CAPS);
+    assert.equal(submitted.length, 1);
+    assert.match(submitted[0]!, /^telegram: memo\.wav \(transcribed\): open the readme/);
+  });
+
   it('stream on --voice --rep=voice: every message is a turn and replies are voice notes only; break ends it', async () => {
     const { hub, out, sent, voices, submitted, broadcast, sessions } = setup({ listenMs: 30 });
     await hub.handle({ channel: 'telegram', user, conversation, text: 'stream on —voice —rep=voice' }, out, CAPS);

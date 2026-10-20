@@ -1,5 +1,10 @@
 # 17 — Image Carousel (`show_images`)
 
+> **Superseded (October 2026):** the carousel is replaced by the media viewer in
+> [`48-show-media.md`](./48-show-media.md). `show_images` still works as shorthand for
+> `show_media` with images; images are served from `/api/display/:id`, not
+> `/api/images/:id`. The Browser workflow below is unchanged.
+
 Push UI screenshots and reference images from the Squeakr brain to the user's
 PWA as a browsable carousel. Designed for hands-free users who can glance at their
 phone while the agent works on UI.

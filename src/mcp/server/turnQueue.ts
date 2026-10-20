@@ -29,6 +29,7 @@
 import { childLogger } from '../../log.js';
 import type { TtsInterruptContext } from '../../voice/ttsInterrupt.js';
 import { interruptPendingWaits, type PendingWait } from './pendingWaits.js';
+import type { TurnMedia } from '../../media/delivery.js';
 
 const log = childLogger('mcp:server:turnQueue');
 
@@ -59,12 +60,18 @@ export interface VoiceTurn {
   isInterrupt: boolean;
   /** What the user actually heard via TTS before barge-in, if any. */
   ttsInterrupt?: TtsInterruptContext;
+  /**
+   * Uploaded media that came with the turn (docs/46). The text already lists
+   * the paths; this is what next_voice_turn() needs to add the pictures.
+   */
+  media?: TurnMedia;
 }
 
 export interface EnqueueVoiceTurnOptions {
   isInterrupt?: boolean;
   ttsInterrupt?: TtsInterruptContext;
   source?: VoiceTurnSource;
+  media?: TurnMedia;
 }
 
 export type EnqueueDelivery =
@@ -146,6 +153,7 @@ class VoiceTurnQueue {
       receivedAt: new Date().toISOString(),
       isInterrupt,
       ttsInterrupt: options?.ttsInterrupt,
+      ...(options?.media && options.media.ids.length > 0 ? { media: options.media } : {}),
     };
 
     const waiter = this.waiters.shift();

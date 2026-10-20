@@ -16,6 +16,7 @@ import { Toolbar } from '@openng/optimus-ui/toolbar';
 import { BrandComponent } from './components/brand/brand.component';
 import { ConfigTabComponent } from './components/config-tab/config-tab.component';
 import { LogsTabComponent } from './components/logs-tab/logs-tab.component';
+import { MediaViewerComponent } from './components/media-viewer/media-viewer.component';
 import { VoiceTabComponent } from './components/voice-tab/voice-tab.component';
 import { WakeWordTestComponent } from './components/wake-word-test/wake-word-test.component';
 import { AppearanceService } from './services/appearance.service';
@@ -57,6 +58,7 @@ interface TabItem {
     WakeWordTestComponent,
     ConfigTabComponent,
     LogsTabComponent,
+    MediaViewerComponent,
   ],
 })
 export class AppComponent implements OnInit, OnDestroy {

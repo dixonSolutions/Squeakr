@@ -2,7 +2,7 @@
  * The attachment bridge — files in a chat, both ways.
  *
  * In: what someone attaches to a `chat` message or sends in a stream. Voice
- * messages (Ogg/Opus) are transcribed into the turn's text; images, video,
+ * messages (Ogg/Opus) and audio files are transcribed into the turn's text; images, video,
  * recordings and documents are saved under the bridge's data directory and
  * handed to the agent by path ("Attached image: /…/shot.png") — every agent
  * CLI can open a file by path, so nothing here is per-CLI.
@@ -112,13 +112,15 @@ export interface PreparedTurn {
 }
 
 /**
- * Turn a message and its attachments into one turn for the agent. `transcribe`
- * takes an Ogg/Opus voice message; anything else is saved and referenced by path.
+ * Turn a message and its attachments into one turn for the agent. Voice
+ * messages and audio files are transcribed into the text — a voice message as
+ * what was said, a file as "<name> (transcribed): …", saved too and referenced
+ * by path; anything else is saved and referenced by path.
  */
 export async function prepareTurn(
   typed: string,
   attachments: readonly ChannelAttachment[],
-  transcribe: (ogg: Buffer) => Promise<string>,
+  transcribe: (data: Buffer, kind: 'voice' | 'audio') => Promise<string>,
   save: (name: string, data: Buffer) => string = saveAttachment,
 ): Promise<PreparedTurn> {
   const heard: string[] = [];
@@ -138,14 +140,15 @@ export async function prepareTurn(
       continue;
     }
     const kind = kindOf(a);
-    if (kind === 'voice') {
+    if (kind === 'voice' || kind === 'audio') {
       try {
-        const words = (await transcribe(data)).trim();
-        if (words) heard.push(words);
+        const words = (await transcribe(data, kind)).trim();
+        if (words) heard.push(kind === 'voice' ? words : `${a.name} (transcribed): ${words}`);
+        else if (kind === 'audio') problems.push(`${a.name} has no words in it that I could make out`);
       } catch (err) {
         problems.push(`${a.name} could not be transcribed (${err instanceof Error ? err.message : String(err)})`);
       }
-      continue;
+      if (kind === 'voice') continue;
     }
     const path = save(a.name, data);
     saved.push(path);

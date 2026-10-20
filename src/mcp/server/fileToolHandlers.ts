@@ -1,8 +1,9 @@
 /**
  * send_files — hand the user files: a recording, a video, a screenshot, a
  * document. Delivered wherever they are listening — a chat channel posts them
- * as attachments (channels/hub.ts), and images also go to the phone's
- * carousel (show_images). Non-blocking, like show_images.
+ * as attachments (channels/hub.ts); images also open on the phone
+ * (show_images), and video / audio go under its media button (show_media,
+ * docs/48). Non-blocking, like show_images.
  *
  * Both tools publish an `agent_files` event with what they sent, so every
  * surface sees the same files.
@@ -13,6 +14,8 @@ import { childLogger } from '../../log.js';
 import { SendFilesSchema } from '../schemas.js';
 import { resolveAllowedImagePath } from './imageRegistry.js';
 import { handleShowImages } from './imageToolHandlers.js';
+import { handleShowMedia } from './displayToolHandlers.js';
+import { kindFromMime, mimeFromName } from '../../display/registry.js';
 
 const log = childLogger('mcp:server:fileTools');
 
@@ -30,8 +33,6 @@ export function publishAgentFiles(files: AgentFileOut[], caption: string | null)
   if (files.length) publishEvent({ type: 'agent_files', files, caption });
 }
 
-const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
-
 export function handleSendFiles(args: unknown): { ok: boolean; count: number; error?: string } {
   const parsed = SendFilesSchema.safeParse(args);
   if (!parsed.success) {
@@ -48,10 +49,19 @@ export function handleSendFiles(args: unknown): { ok: boolean; count: number; er
       out.push(f);
     }
   }
-  // Images also land in the phone's carousel.
-  const images = out.filter((f) => (f.path && IMAGE.test(f.path)) || f.mime?.startsWith('image/'));
+  // Images also open on the phone; video and audio wait under its media button.
+  const kindOf = (f: AgentFileOut) => {
+    const mime = f.mime ?? mimeFromName(f.path ?? f.url ?? f.name ?? '');
+    return mime ? kindFromMime(mime) : null;
+  };
+  const images = out.filter((f) => kindOf(f) === 'image');
   if (images.length) {
     handleShowImages({ images: images.slice(0, 10).map(({ name: _n, ...img }) => img), ...(caption ? { caption } : {}), publish: false });
+  }
+  const playable = out.filter((f) => kindOf(f) === 'video' || kindOf(f) === 'audio');
+  if (playable.length) {
+    const shown = handleShowMedia({ items: playable.slice(0, 10), display: 'tray', ...(caption ? { caption } : {}), publish: false });
+    if (!shown['ok']) log.warn({ error: shown['error'] }, 'send_files: could not put media on the phone');
   }
   publishAgentFiles(out, caption ?? null);
   log.info({ count: out.length }, 'send_files published');

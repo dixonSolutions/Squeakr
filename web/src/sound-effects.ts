@@ -8,6 +8,8 @@
  */
 import { CUE_FILENAME, VOICE_CUES, shouldPlayCue, type VoiceCue } from '@squeakr/client';
 import { getSharedAudioContext, unlockAudioContext } from './audio.js';
+import { applyElementSink, getFullLoudnessBus } from './audio-output.js';
+import { currentLoudness } from './audio-prefs.js';
 
 export type { VoiceCue };
 
@@ -70,7 +72,9 @@ export function playVoiceCueNow(cue: VoiceCue, opts?: { force?: boolean }): void
     lastPlayedAt[cue] = now;
 
     const el = getOrCreateAudio(cue);
-    el.volume = PLAYBACK_VOLUME;
+    // Cues follow the loudness slider down, never up — the files are already loud.
+    el.volume = PLAYBACK_VOLUME * currentLoudness().attenuation;
+    applyElementSink(el);
     el.currentTime = 0;
     void el.play().catch(() => {
       // iOS may reject if context locked — retry after unlock.
@@ -112,7 +116,7 @@ export function playConnectDing(): void {
     gain.gain.setValueAtTime(0.0001, now);
     gain.gain.exponentialRampToValueAtTime(0.22, now + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
-    osc.connect(gain).connect(ctx.destination);
+    osc.connect(gain).connect(getFullLoudnessBus());
     osc.start(now);
     osc.stop(now + 0.4);
   } catch {
@@ -137,7 +141,7 @@ export function playStartBeep(): void {
     gain.gain.setValueAtTime(0.0001, now);
     gain.gain.exponentialRampToValueAtTime(0.14, now + 0.015);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-    osc.connect(gain).connect(ctx.destination);
+    osc.connect(gain).connect(getFullLoudnessBus());
     osc.start(now);
     osc.stop(now + 0.26);
   } catch {

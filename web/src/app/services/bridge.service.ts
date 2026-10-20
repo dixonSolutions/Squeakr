@@ -121,14 +121,6 @@ export type {
   ApprovalResponse,
 } from '@squeakr/client';
 
-// ── Image carousel push types ─────────────────────────────────────────────
-
-export interface CarouselImage {
-  id: string;
-  src: string;
-  caption?: string;
-}
-
 // ── Agent-provider auth push types ────────────────────────────────────────
 
 export type AuthFlowId = 'browser-url' | 'device-code' | 'token-paste' | 'api-key';
@@ -231,12 +223,10 @@ export class BridgeService {
   /** Self-hosted speech server setup: image pull, container start, model install. */
   readonly speechSetupProgress$ = new Subject<SpeechSetupProgressPush>();
 
-  // ── Image carousel signals ─────────────────────────────────────────────
+  // ── Agent-shown media (show_media, docs/48) ────────────────────────────
 
-  readonly carouselImages = signal<CarouselImage[]>([]);
-  readonly carouselBatchId = signal<string | null>(null);
-  readonly carouselDurationMs = signal<number>(8000);
-  readonly carouselCaption = signal<string | null>(null);
+  /** media_show / media_remove / media_sync / media_control frames, for DisplayService. */
+  readonly mediaFrames$ = new Subject<Record<string, unknown>>();
 
   // ── Private ────────────────────────────────────────────────────────────
 
@@ -358,6 +348,15 @@ export class BridgeService {
     this.wsStatus.set('disconnected');
     this.apiStatus.set('ok');
     this._rejectAllPending('Bridge disconnected');
+    // Hanging up ends the session, and media shown in it goes with it.
+    this.mediaFrames$.next({ type: 'media_sync', items: [] });
+  }
+
+  /** Tell the bridge how an agent-shown video / audio is playing (docs/48). */
+  sendMediaState(state: Record<string, unknown>): void {
+    if (this._ws?.readyState === WebSocket.OPEN) {
+      this._ws.send(JSON.stringify({ type: 'media_state', ...state }));
+    }
   }
 
   // ── API calls ──────────────────────────────────────────────────────────
@@ -732,32 +731,12 @@ export class BridgeService {
         break;
       }
 
-      case 'show_images': {
-        const rawImages = msg['images'];
-        if (!Array.isArray(rawImages)) break;
-        const images: CarouselImage[] = rawImages
-          .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
-          .map((item) => ({
-            id: String(item['id'] ?? ''),
-            src: String(item['src'] ?? ''),
-            caption: typeof item['caption'] === 'string' ? item['caption'] : undefined,
-          }))
-          .filter((item) => item.id && item.src);
-        if (images.length === 0) break;
-
-        const duration =
-          typeof msg['duration_ms'] === 'number' && msg['duration_ms'] > 0
-            ? msg['duration_ms']
-            : 8000;
-        const batchId = typeof msg['batch_id'] === 'string' ? msg['batch_id'] : null;
-        const caption = typeof msg['caption'] === 'string' ? msg['caption'] : null;
-
-        this.carouselImages.set(images);
-        this.carouselBatchId.set(batchId);
-        this.carouselDurationMs.set(duration);
-        this.carouselCaption.set(caption);
+      case 'media_show':
+      case 'media_remove':
+      case 'media_sync':
+      case 'media_control':
+        this.mediaFrames$.next(msg);
         break;
-      }
 
       case 'tool_result': {
         const callId = msg['call_id'] as string | undefined;

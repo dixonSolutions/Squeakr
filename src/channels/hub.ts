@@ -12,11 +12,11 @@ import { registerVoiceSession } from '../mcp/server/voiceToolHandlers.js';
 import { transcribe } from '../providers/speech/input/service.js';
 import { synthesize } from '../providers/speech/output/service.js';
 import { subscribeEvents } from '../state/eventBus.js';
-import { decodeOggOpusTo16k, encodeOggOpus, pcmSeconds } from './audio.js';
+import { decodeAudioFileTo16k, decodeOggOpusTo16k, encodeOggOpus, pcmSeconds } from './audio.js';
 import { dbBindingStore, type BindingStore, type ChannelBinding } from './bindings.js';
 import { formatSessions, formatStatus } from '../control/format.js';
 import { applyBinding, voiceDefaultKey } from '../control/sessions.js';
-import { loadAgentFile, prepareTurn, saveAttachment, waveformOf, type AgentFile, type ChannelAttachment, type OutboundFile } from './attachments.js';
+import { kindOf, loadAgentFile, prepareTurn, saveAttachment, waveformOf, type AgentFile, type ChannelAttachment, type OutboundFile } from './attachments.js';
 import type { BridgeOps } from '../control/types.js';
 import { runChatCli, type CliRunner } from './cliRunner.js';
 import { isCommand, parseCommand, renderCli, type StreamInput, type StreamRep } from './commands.js';
@@ -295,7 +295,8 @@ export class ChannelHub {
       return { text: '' };
     }
     if (isCommand(input.text) && (input.text.trim() || !input.attachments?.length)) return this.command(input, out, capabilities, opts);
-    if (input.attachments?.some((a) => a.voice)) {
+    // Something to listen to — a voice message or an audio file — is a turn, typed words or not.
+    if (input.attachments?.some((a) => ['voice', 'audio'].includes(kindOf(a)))) {
       await this.turn(input, out, input.text, out.sendVoice ? 'both' : 'text');
       return { text: '' };
     }
@@ -363,7 +364,12 @@ export class ChannelHub {
     typed: string,
     mode: ReplyMode,
   ): Promise<void> {
-    const prepared = await prepareTurn(typed, input.attachments ?? [], async (ogg) => this.stt(decodeOggOpusTo16k(ogg)), this.save);
+    const prepared = await prepareTurn(
+      typed,
+      input.attachments ?? [],
+      async (data, kind) => this.stt(kind === 'voice' ? decodeOggOpusTo16k(data) : await decodeAudioFileTo16k(data)),
+      this.save,
+    );
     for (const p of prepared.problems) await out.send(`⚠️ ${p}`);
     if (!prepared.text) {
       if (!prepared.problems.length) await out.send("🎙️ I didn't catch any words in that.");

@@ -21,6 +21,15 @@ import { recordTurn } from '../state/turns.js';
 import { publishEvent } from '../state/eventBus.js';
 import { recordUserTurn } from '../logging/transcripts.js';
 import { childLogger } from '../log.js';
+import { resolveMediaIds } from '../media/store.js';
+import {
+  composeTurnText,
+  describeMediaForAgent,
+  setAttachTargetResolver,
+  setInlineSupportResolver,
+  takeAttachedMedia,
+  type TurnMedia,
+} from '../media/delivery.js';
 import {
   getActiveVoiceAgent,
   isVoiceAgentRunning,
@@ -44,6 +53,8 @@ export interface SubmitTurnOptions {
   source: TurnSource;
   isInterrupt?: boolean;
   ttsInterrupt?: TtsInterruptContext;
+  /** Uploaded media sent with this turn (docs/46). */
+  media?: TurnMedia;
 }
 
 export interface TurnDelivery {
@@ -53,11 +64,14 @@ export interface TurnDelivery {
   run_id: string | null;
   pid: number | null;
   session_id: string | null;
+  /** Media ids that went out with the turn, and any that had expired. */
+  media_ids?: string[];
+  media_missing?: string[];
 }
 
 export class TurnError extends Error {
   constructor(
-    public readonly code: 'EMPTY' | 'NO_PROJECT' | 'SPAWN_FAILED',
+    public readonly code: 'EMPTY' | 'NO_PROJECT' | 'SPAWN_FAILED' | 'MEDIA_GONE',
     message: string,
   ) {
     super(message);
@@ -65,9 +79,39 @@ export class TurnError extends Error {
   }
 }
 
+/**
+ * The turn's text with its media written in (docs/46): what the user sent
+ * with it, then anything they attached to the conversation since the agent
+ * last heard from them.
+ */
+export function withMedia(
+  rawText: string,
+  media: TurnMedia | undefined,
+): { text: string; media: TurnMedia | undefined; missing: string[] } {
+  const sent = media && media.ids.length > 0 ? resolveMediaIds(media.ids) : { found: [], missing: [] };
+  if (media && media.ids.length > 0 && sent.found.length === 0) {
+    throw new TurnError('MEDIA_GONE', 'The uploaded files have expired on the bridge — upload them again.');
+  }
+  const staged = takeAttachedMedia();
+  let text = composeTurnText(rawText, sent.found, media?.delivery ?? 'path');
+  if (staged) {
+    const block = describeMediaForAgent(staged.assets, staged.delivery, 'attach');
+    text = text ? `${text}\n\n${block}` : block;
+  }
+  const ids = [...sent.found.map((a) => a.id), ...(staged?.assets.map((a) => a.id) ?? [])];
+  const inline = media?.delivery === 'inline' || staged?.delivery === 'inline';
+  return {
+    text,
+    media: ids.length > 0 ? { ids, delivery: inline ? 'inline' : 'path' } : undefined,
+    missing: sent.missing,
+  };
+}
+
 export function submitAgentNativeTurn(rawText: string, opts: SubmitTurnOptions): TurnDelivery {
-  const text = rawText.trim();
-  if (!text) throw new TurnError('EMPTY', 'Turn text is empty.');
+  if (!rawText.trim() && !(opts.media && opts.media.ids.length > 0)) {
+    throw new TurnError('EMPTY', 'Turn text is empty.');
+  }
+  const { text, media, missing } = withMedia(rawText, opts.media);
   const sessionKey = opts.sessionKey ?? 'default';
 
   const bridgeSession = getSessionState(sessionKey);
@@ -103,6 +147,7 @@ export function submitAgentNativeTurn(rawText: string, opts: SubmitTurnOptions):
       isInterrupt: opts.isInterrupt,
       ttsInterrupt: opts.ttsInterrupt,
       source: opts.source,
+      ...(media ? { media } : {}),
     });
     delivery = result.kind;
   }
@@ -114,10 +159,12 @@ export function submitAgentNativeTurn(rawText: string, opts: SubmitTurnOptions):
     run_id: va?.runId ?? null,
     pid: va?.pid ?? null,
     session_id: va?.sessionId ?? null,
+    ...(media ? { media_ids: media.ids } : {}),
+    ...(missing.length > 0 ? { media_missing: missing } : {}),
   };
 
   log.info(
-    { sessionKey, source: opts.source, runId: out.run_id, pid: out.pid, delivery, textLen: text.length },
+    { sessionKey, source: opts.source, runId: out.run_id, pid: out.pid, delivery, textLen: text.length, media: media?.ids.length ?? 0 },
     'agent_native turn delivered',
   );
   // Every desk client sees every turn, whichever surface typed or spoke it.
@@ -128,6 +175,20 @@ export function submitAgentNativeTurn(rawText: string, opts: SubmitTurnOptions):
   recordUserTurn(text, opts.source);
   return out;
 }
+
+// Attached media (docs/46) rides out on the voice agent's own MCP session —
+// never on a worker's, which would act on it as if it were its own request.
+setAttachTargetResolver((sessionKey) => {
+  const va = getActiveVoiceAgent();
+  return Boolean(va?.mcpSessionId && va.mcpSessionId === sessionKey);
+});
+
+// Whether pictures can go straight into the chat is the active CLI's call
+// (provider rule: every provider declares mediaInput()).
+setInlineSupportResolver(() => {
+  const provider = getActiveProvider();
+  return { supported: provider.mediaInput().mcpImageResults, cli: provider.displayName };
+});
 
 // ── Orphaned turns ───────────────────────────────────────────────────────────
 //

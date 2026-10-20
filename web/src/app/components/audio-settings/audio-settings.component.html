@@ -1,0 +1,233 @@
+<div class="cv-audio">
+
+  <p class="cv-audio-intro">
+    <i class="pi pi-mobile"></i>
+    <span>These settings belong to <strong>this device</strong> and are remembered by this browser. Other phones and laptops on the same bridge keep their own.</span>
+  </p>
+
+  <!-- ══════════════════ 1. Microphone ══════════════════ -->
+  <section class="cv-audio-card" aria-labelledby="aud-mic-title">
+    <header class="cv-audio-card-head">
+      <span class="cv-audio-step">1</span>
+      <div>
+        <h3 id="aud-mic-title">Microphone</h3>
+        <p>What the agent hears you through.</p>
+      </div>
+      <button type="button" class="cv-audio-icon-btn" (click)="refreshDevices()"
+        [class.cv-spin]="loadingDevices" title="Refresh the device list" aria-label="Refresh devices">
+        <i class="pi pi-refresh"></i>
+      </button>
+    </header>
+
+    <label class="cv-audio-field-label" for="aud-input">Input device</label>
+    <p-select inputId="aud-input" data-testid="aud-input"
+      [options]="inputOptions()" optionLabel="label" optionValue="value"
+      [ngModel]="prefs().inputDeviceId ?? ''" (ngModelChange)="onInputChange($event)"
+      appendTo="body" styleClass="cv-audio-select">
+      <ng-template let-opt pTemplate="item">
+        <span class="cv-audio-dev">
+          <i [class]="'pi ' + deviceIcon(opt.kind, 'in')"></i>
+          <span class="cv-audio-dev-name">{{ opt.label }}</span>
+          @if (deviceKindLabel(opt.kind); as k) { <span class="cv-audio-dev-kind">{{ k }}</span> }
+        </span>
+      </ng-template>
+      <ng-template let-opt pTemplate="selectedItem">
+        <span class="cv-audio-dev">
+          <i [class]="'pi ' + deviceIcon(opt.kind, 'in')"></i>
+          <span class="cv-audio-dev-name">{{ opt.label }}</span>
+        </span>
+      </ng-template>
+    </p-select>
+
+    @if (!labelled()) {
+      <div class="cv-audio-callout">
+        <span>Device names appear once this site may use the microphone.</span>
+        <p-button label="Show names" icon="pi pi-unlock" size="small" [outlined]="true" (onClick)="revealDeviceNames()" />
+      </div>
+    }
+    @if (missingInput(); as missing) {
+      <p-message severity="warn" variant="simple"
+        [text]="'“' + missing + '” is not connected — using the system default until it is back.'" />
+    }
+    @if (restartNeeded()) {
+      <p-message severity="info" variant="simple"
+        text="A voice session is using the microphone. Hang up and start again to switch to the new one." />
+    }
+
+    <!-- Live level -->
+    <div class="cv-audio-meter" [class.cv-audio-meter--on]="micListening()" role="meter"
+      aria-label="Microphone level" [attr.aria-valuenow]="micPercent()"
+      aria-valuemin="0" aria-valuemax="100">
+      <div class="cv-audio-meter-fill" [style.clip-path]="'inset(0 ' + (100 - micLevel() * 100) + '% 0 0 round 999px)'"></div>
+      <div class="cv-audio-meter-peak" [style.left.%]="micPeak() * 100"></div>
+      <span class="cv-audio-meter-zones" aria-hidden="true"><i></i><i></i><i></i></span>
+    </div>
+    <div class="cv-audio-meter-caption">
+      @if (recording()) {
+        <span class="cv-audio-rec-dot"></span> Recording… {{ recordCountdown() }} s — say something
+      } @else if (playingBack()) {
+        <i class="pi pi-volume-up"></i> Playing your recording back
+      } @else if (micListening()) {
+        Speak normally — the bar should reach the middle band.
+      } @else {
+        Start the check to see the level.
+      }
+    </div>
+
+    <div class="cv-audio-actions">
+      <p-button [label]="micListening() ? 'Stop check' : 'Check level'" data-testid="aud-mic-check"
+        [icon]="micListening() ? 'pi pi-stop-circle' : 'pi pi-wave-pulse'"
+        [severity]="micListening() ? 'secondary' : 'primary'" [outlined]="!micListening()"
+        (onClick)="toggleMicCheck()" />
+      <p-button [label]="recording() ? 'Recording…' : 'Record & play back'" data-testid="aud-mic-record"
+        icon="pi pi-replay" severity="secondary" [outlined]="true"
+        [disabled]="recording()" (onClick)="recordAndPlayBack()"
+        [attr.title]="'Records ' + recordSeconds + ' seconds, then plays them on the chosen speaker'" />
+    </div>
+    <p class="cv-audio-note">
+      Hands-free wake words and server speech-to-text use this microphone. The browser's own dictation
+      (when it is the speech-in engine) always uses the system default.
+    </p>
+  </section>
+
+  <!-- ══════════════════ 2. Speaker ══════════════════ -->
+  <section class="cv-audio-card" aria-labelledby="aud-out-title">
+    <header class="cv-audio-card-head">
+      <span class="cv-audio-step">2</span>
+      <div>
+        <h3 id="aud-out-title">Speaker</h3>
+        <p>Where the agent's voice and sounds come out.</p>
+      </div>
+    </header>
+
+    @if (canPickOutput()) {
+      <label class="cv-audio-field-label" for="aud-output">Output device</label>
+      <p-select inputId="aud-output" data-testid="aud-output"
+        [options]="outputOptions()" optionLabel="label" optionValue="value"
+        [ngModel]="prefs().outputDeviceId ?? ''" (ngModelChange)="onOutputChange($event)"
+        appendTo="body" styleClass="cv-audio-select">
+        <ng-template let-opt pTemplate="item">
+          <span class="cv-audio-dev">
+            <i [class]="'pi ' + deviceIcon(opt.kind, 'out')"></i>
+            <span class="cv-audio-dev-name">{{ opt.label }}</span>
+            @if (deviceKindLabel(opt.kind); as k) { <span class="cv-audio-dev-kind">{{ k }}</span> }
+          </span>
+        </ng-template>
+        <ng-template let-opt pTemplate="selectedItem">
+          <span class="cv-audio-dev">
+            <i [class]="'pi ' + deviceIcon(opt.kind, 'out')"></i>
+            <span class="cv-audio-dev-name">{{ opt.label }}</span>
+          </span>
+        </ng-template>
+      </p-select>
+      @if (support.chooser && outputs().length === 0) {
+        <div class="cv-audio-callout">
+          <span>This browser lists speakers only through its own chooser.</span>
+          <p-button label="Choose speaker" icon="pi pi-volume-up" size="small" [outlined]="true"
+            (onClick)="chooseOutputViaBrowser()" />
+        </div>
+      }
+      @if (missingOutput(); as missing) {
+        <p-message severity="warn" variant="simple"
+          [text]="'“' + missing + '” is not connected — playing on the system default.'" />
+      }
+    } @else {
+      <div class="cv-audio-callout cv-audio-callout--info" data-testid="aud-output-system">
+        <i class="pi pi-info-circle"></i>
+        @if (isIos) {
+          <span>On iPhone and iPad the system picks the speaker. Open <strong>Control Center</strong>, long-press the
+            audio card and tap the <strong>AirPlay</strong> icon to switch between the iPhone, AirPods or a
+            Bluetooth speaker. Choosing a Bluetooth headset's microphone above routes playback to it too.</span>
+        } @else {
+          <span>This browser always plays on the system output — change it in your operating system's sound settings.</span>
+        }
+      </div>
+    }
+
+    <div class="cv-audio-actions">
+      <p-button label="Play test tone" icon="pi pi-bell" severity="secondary" [outlined]="true"
+        data-testid="aud-tone" (onClick)="playTestTone()" />
+    </div>
+    @if (canPickOutput()) {
+      <p class="cv-audio-note">
+        Server voices, agent audio and sound cues follow this choice. Browser voices (speechSynthesis) always play on the
+        system default.
+      </p>
+    }
+  </section>
+
+  <!-- ══════════════════ 3. Agent voice ══════════════════ -->
+  <section class="cv-audio-card" aria-labelledby="aud-voice-title">
+    <header class="cv-audio-card-head">
+      <span class="cv-audio-step">3</span>
+      <div>
+        <h3 id="aud-voice-title">Agent voice</h3>
+        <p>How loud and how fast the agent talks. The middle is the default.</p>
+      </div>
+      <button type="button" class="cv-audio-icon-btn" (click)="resetAll()" title="Reset both to default"
+        aria-label="Reset loudness and speed" [disabled]="prefs().loudness === 50 && prefs().speed === 50">
+        <i class="pi pi-undo"></i>
+      </button>
+    </header>
+
+    <cv-level-slider inputId="aud-loudness" label="Loudness" icon="pi-volume-up"
+      [value]="prefs().loudness" [valueLabel]="loudnessText()"
+      minLabel="Silent" maxLabel="Max boost"
+      (valueChange)="onLoudness($event)" />
+
+    @if (boostOnBrowserVoice()) {
+      <p-message severity="warn" variant="simple" data-testid="aud-boost-warning"
+        text="Browser voices stop at 100 % — the boost above the middle applies to server voices, agent audio and chimes. Pick a server voice under Speech engines to go louder." />
+    } @else if (prefs().loudness > 50) {
+      <p class="cv-audio-note">Above the middle the voice is amplified and passed through a limiter, so it gets louder without crackling.</p>
+    }
+
+    <cv-level-slider inputId="aud-speed" label="Speech speed" icon="pi-gauge"
+      [value]="prefs().speed" [valueLabel]="speedText()"
+      minLabel="Slower (½×)" maxLabel="Faster (2×)"
+      (valueChange)="onSpeed($event)" />
+
+    <!-- Speech test -->
+    <div class="cv-audio-test" [class.cv-audio-test--live]="testRunning()" data-testid="aud-test">
+      <div class="cv-audio-test-head">
+        <div class="cv-audio-test-title">
+          <i class="pi pi-comment"></i>
+          <span>Speech test</span>
+        </div>
+        <p-tag [value]="testProvider() ?? engineLabel()" [severity]="engine() ? 'info' : 'warn'"
+          styleClass="cv-audio-test-engine" />
+      </div>
+
+      <p-selectButton [options]="sampleOptions" optionLabel="label" optionValue="value"
+        [ngModel]="sample" (ngModelChange)="onSampleChange($event)" [allowEmpty]="false"
+        size="small" aria-label="Sample text" />
+
+      <blockquote class="cv-audio-test-text">“{{ sampleText }}”</blockquote>
+
+      <div class="cv-audio-test-progress" aria-hidden="true">
+        <div [style.width.%]="testProgress()"></div>
+      </div>
+
+      <div class="cv-audio-test-controls">
+        <p-button data-testid="aud-test-play"
+          [label]="testState().phase === 'loading' ? 'Preparing…' : testRunning() ? 'Stop' : 'Play test'"
+          [icon]="testRunning() ? 'pi pi-stop-circle' : 'pi pi-play-circle'"
+          [loading]="testState().phase === 'loading'"
+          [severity]="testRunning() ? 'secondary' : 'primary'"
+          [disabled]="!engine()" (onClick)="toggleSpeechTest()" />
+        <label class="cv-audio-toggle">
+          <p-toggleSwitch [ngModel]="loopTest" (ngModelChange)="onLoopChange($event)" inputId="aud-loop" />
+          <span>Repeat while I adjust</span>
+        </label>
+      </div>
+
+      @if (testError(); as err) {
+        <p-message severity="error" variant="simple" [text]="err" />
+      }
+      <p class="cv-audio-note">
+        Plays in the voice the agent will actually use, through the same speaker and levels. Drag the sliders while it
+        plays — the change is heard straight away.
+      </p>
+    </div>
+  </section>
+</div>
