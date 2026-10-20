@@ -3,7 +3,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Squeakr — talk to your coding agent. Self-hosted voice bridge for Cursor, Codex, Claude Code and Codewhale CLIs",
   "keywords": [
     "voice",
