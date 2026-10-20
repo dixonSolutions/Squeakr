@@ -18,6 +18,11 @@
  * Speaking over the agent interrupts it: the line playing is cut and the
  * queued ones dropped, like a barge-in on the phone.
  *
+ * The agent's own audio streams (docs/47) play here too. A call has one
+ * voice and no mixer, so a `queue` stream takes its place among the replies
+ * and an `async` one goes to the front and plays next — it cannot play
+ * under speech the way it does on the phone.
+ *
  * And it is the phone's voice session: the same server settings decide when
  * speech is a request — input mode, wake words, VAD or end phrase, silence
  * (`settings.voice`, callTurns.ts) — and it plays the same cues (listening when
@@ -46,6 +51,7 @@ import { prepareAgentForChannels } from './prepare.js';
 import { cueStream, type CallCue } from './cues.js';
 import { CallTurns, type CallTurnSettings, type TurnVerdict } from './callTurns.js';
 import { deliverStreamTurn, type StreamTurnOutcome } from '../voice/streamTurns.js';
+import { reportAgentAudioPlayback } from '../mcp/server/audioStreamToolHandlers.js';
 
 const log = childLogger('channels:voice-call');
 
@@ -78,6 +84,8 @@ export interface VoiceCallDeps {
   prepare(): Promise<void>;
   /** Send one frame to the app; dropped when no app is connected. */
   mirror(frame: Record<string, unknown>): void;
+  /** Tell the agent's stream log what the call did with one of its audio streams. */
+  reportAudio(client: string, streamId: string, state: 'playing' | 'ended' | 'stopped', message?: string): void;
 }
 
 export interface VoiceCallOptions {
@@ -122,7 +130,45 @@ const defaultDeps: VoiceCallDeps = {
   mirror: (frame) => {
     if (isControlSocketOpen()) pushToPhone(frame);
   },
+  reportAudio: (client, streamId, state, message) =>
+    reportAgentAudioPlayback(client, { stream_id: streamId, state, ...(message ? { message } : {}) }),
 };
+
+/**
+ * An open agent audio stream with nothing left to play steps aside after this
+ * long, so replies are not held behind a stream the agent forgot to close.
+ */
+const AUDIO_DRY_MS = 1500;
+
+/** One of the agent's audio streams, as this call receives it. */
+interface CallAudio {
+  id: string;
+  label: string;
+  volume: number;
+  sampleRate: number;
+  /** Plays next rather than at the back of the replies. */
+  async: boolean;
+  chunks: Buffer[];
+  ended: boolean;
+  stopped: boolean;
+  /** In the reply queue or playing — false while it has stepped aside, dry. */
+  active: boolean;
+  wake: (() => void) | null;
+}
+
+interface CallLine {
+  text: string;
+  ownLine: boolean;
+  /** Set when this "line" is an agent audio stream rather than text to speak. */
+  audio?: CallAudio;
+}
+
+function scalePcm16(pcm: Buffer, volume: number): Buffer {
+  if (volume >= 1) return pcm;
+  const out = Buffer.alloc(pcm.length - (pcm.length % 2));
+  for (let i = 0; i < out.length; i += 2) out.writeInt16LE(Math.round(pcm.readInt16LE(i) * volume), i);
+  return out;
+}
 
 interface Speaker {
   pipe: AudioStreamPipe;
@@ -132,7 +178,8 @@ interface Speaker {
 export class VoiceCall {
   private readonly deps: VoiceCallDeps;
   private readonly speakers = new Map<string, Speaker>();
-  private readonly lines: Array<{ text: string; ownLine: boolean }> = [];
+  private readonly lines: CallLine[] = [];
+  private readonly audio = new Map<string, CallAudio>();
   private cueChain: Promise<void> = Promise.resolve();
   /** Read once, when the call starts — as a phone session reads them at auth. */
   readonly turns: CallTurns;
@@ -284,8 +331,125 @@ export class VoiceCall {
 
   /** Cut the agent off: stop the line playing, drop the rest. */
   interrupt(): void {
+    for (const line of this.lines) if (line.audio) this.dropAudio(line.audio, 'interrupted');
     this.lines.length = 0;
     this.playing?.abort();
+  }
+
+  private dropAudio(a: CallAudio, message?: string): void {
+    a.stopped = true;
+    a.chunks.length = 0;
+    a.wake?.();
+    if (this.audio.delete(a.id)) this.deps.reportAudio(this.opts.name, a.id, 'stopped', message);
+  }
+
+  /** `agent_audio` frames from the bridge (docs/47). */
+  private onAgentAudio(msg: Record<string, unknown>): void {
+    const id = typeof msg['stream_id'] === 'string' ? msg['stream_id'] : '';
+    if (!id || this.closed) return;
+    const a = this.audio.get(id);
+    switch (msg['op']) {
+      case 'open': {
+        if (a) return;
+        const stream: CallAudio = {
+          id,
+          label: typeof msg['label'] === 'string' && msg['label'] ? msg['label'] : id,
+          volume: typeof msg['volume'] === 'number' ? Math.max(0, Math.min(1, msg['volume'])) : 1,
+          sampleRate: typeof msg['sample_rate'] === 'number' ? msg['sample_rate'] : 24_000,
+          async: msg['mode'] === 'async',
+          chunks: [],
+          ended: false,
+          stopped: false,
+          active: false,
+          wake: null,
+        };
+        this.audio.set(id, stream);
+        this.activity(`🔊 ${stream.label}`);
+        // Queued with its first audio, so an empty stream never holds the replies.
+        return;
+      }
+      case 'chunk':
+        if (!a || a.stopped || typeof msg['pcm'] !== 'string') return;
+        a.chunks.push(scalePcm16(Buffer.from(msg['pcm'], 'base64'), a.volume));
+        if (a.active) a.wake?.();
+        else this.queueAudio(a, a.async);
+        return;
+      case 'end':
+        if (!a) return;
+        a.ended = true;
+        a.wake?.();
+        if (!a.active && a.chunks.length === 0 && this.audio.delete(a.id)) {
+          this.deps.reportAudio(this.opts.name, a.id, 'ended');
+        }
+        return;
+      case 'stop': {
+        if (!a) return;
+        const queued = this.lines.findIndex((l) => l.audio === a);
+        if (queued >= 0) this.lines.splice(queued, 1);
+        this.dropAudio(a);
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  /** Into the reply queue: at the back, or (async) next. */
+  private queueAudio(a: CallAudio, next: boolean): void {
+    a.active = true;
+    const line: CallLine = { text: a.label, ownLine: false, audio: a };
+    if (next) this.lines.unshift(line);
+    else this.lines.push(line);
+    this.drainLoop ??= this.drain().finally(() => {
+      this.drainLoop = null;
+    });
+  }
+
+  /** Play one agent audio stream into the call as its chunks arrive. */
+  private async playAudio(a: CallAudio, signal: AbortSignal): Promise<void> {
+    if (a.stopped) return;
+    let dry = false;
+    const onAbort = () => a.wake?.();
+    signal.addEventListener('abort', onAbort, { once: true });
+    async function* chunks(): AsyncIterable<Buffer> {
+      for (;;) {
+        if (a.stopped || signal.aborted) return;
+        const next = a.chunks.shift();
+        if (next) {
+          yield next;
+          continue;
+        }
+        if (a.ended) return;
+        const woken = await new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => {
+            a.wake = null;
+            resolve(false);
+          }, AUDIO_DRY_MS);
+          a.wake = () => {
+            clearTimeout(timer);
+            a.wake = null;
+            resolve(true);
+          };
+        });
+        if (!woken && a.chunks.length === 0 && !a.ended) {
+          dry = true;
+          return;
+        }
+      }
+    }
+    this.deps.reportAudio(this.opts.name, a.id, 'playing');
+    try {
+      await this.opts.sink.play({ sampleRate: a.sampleRate, chunks: chunks() }, signal);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+    if (a.stopped) return;
+    if (signal.aborted) this.dropAudio(a, 'interrupted');
+    else if (dry) {
+      // Stepped aside; more audio queues it again, `end` finishes it.
+      a.active = false;
+      if (a.chunks.length > 0) this.queueAudio(a, false);
+    } else if (this.audio.delete(a.id)) this.deps.reportAudio(this.opts.name, a.id, 'ended');
   }
 
   async close(): Promise<void> {
@@ -397,6 +561,10 @@ export class VoiceCall {
       if (msg.state === 'error') this.cue('error', true);
       return;
     }
+    if (msg?.type === 'agent_audio') {
+      this.onAgentAudio(payload as Record<string, unknown>);
+      return;
+    }
     if (msg?.type !== 'speak' || typeof msg.text !== 'string' || !msg.text.trim()) return;
     this.opts.onLine?.({ who: 'agent', text: msg.text });
     this.mirror({ event: 'reply', text: msg.text, own: false });
@@ -423,6 +591,10 @@ export class VoiceCall {
       this.abort.signal.addEventListener('abort', onClose, { once: true });
       this.playing = line;
       try {
+        if (next.audio) {
+          await this.playAudio(next.audio, line.signal);
+          continue;
+        }
         const pcm = await this.deps.synthesize(text, line.signal);
         if (!pcm) {
           this.notice('The configured voice cannot stream — pick a server voice in Config → Speech.');

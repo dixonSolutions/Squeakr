@@ -80,6 +80,11 @@ export function summarizeToolArgs(tool: string, args: Record<string, unknown>): 
       return args['timeout_ms'] != null ? `timeout_ms=${args['timeout_ms']}` : '';
     case 'inject':
       return truncate(String(args['message'] ?? ''), 60);
+    case 'audio_stream_write': {
+      // Never echo a base64 payload into the log.
+      const what = args['path'] ?? args['url'] ?? (args['packet'] ? 'packet' : args['data'] ? 'data' : '');
+      return truncate(`${String(args['stream_id'] ?? '')} ← ${String(what)}`, 80);
+    }
     default:
       return previewRecord(args);
   }

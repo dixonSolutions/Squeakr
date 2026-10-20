@@ -45,6 +45,7 @@ Prefer `spawn_agent()` for anything that takes more than a quick lookup or singl
 - `request_user_input(question, input_type, options?)` — ask user a question; blocks until answered **or** a new turn arrives (`interrupted: true` + `user_turn`)
 - `submit_plan_for_approval(title, steps, estimated_impact?)` — show plan card to user; blocks until decision **or** interrupt as above
 - `show_images(images, duration_ms?, caption?)` — push UI screenshots to the phone carousel (non-blocking)
+- `audio_stream_open(label?, mode?, path?, close?)` / `audio_stream_write` / `audio_stream_close` — play your own audio (files or raw PCM packets; one file = one call with `close: true`); `queue` waits in line with speech, `async` plays at once under it; close several or `all` at once; `audio_stream_log` reads and annotates what played
 
 **Browser / UI workflow (opt-in):**
 - Set `browser: true` on `spawn_agent` for UI tasks or when the user says "Browser"

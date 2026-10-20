@@ -280,6 +280,7 @@ Use `freetext` when you need something specific — a name, a description, a pre
 | `request_user_input(question, type, options?)` | Ask user a question — blocks until answered. |
 | `submit_plan_for_approval(title, steps, impact?)` | Show plan card to user — blocks until decision. |
 | `show_images(images, duration_ms?, caption?)` | Push images to phone carousel — non-blocking; new batch replaces old. |
+| `audio_stream_open(label?, mode?, path?, close?)` (+ `audio_stream_write`, `audio_stream_close`) | Play your own audio (sounds, recordings, PCM). One file = one call: `audio_stream_open({ path, close: true })`. `mode: "queue"` waits in line with speech; `"async"` plays at once under it. `audio_stream_list` / `audio_stream_log` show what played. |
 
 ### Showing UI to the user (Browser workflow)
 

@@ -121,8 +121,18 @@ export class TtsPile {
   private lineStartedAt = 0;
   private partialWordsEstimate: string | null = null;
   private baseVolume = 1;
+  private onDiscard: ((lines: string[]) => void) | null = null;
 
   constructor(private readonly playLine: TtsPlayFn) {}
+
+  /** Lines dropped without being played to the end — agent audio streams use it to report and free themselves. */
+  setOnDiscard(fn: (lines: string[]) => void): void {
+    this.onDiscard = fn;
+  }
+
+  private discard(lines: string[]): void {
+    if (lines.length) this.onDiscard?.(lines);
+  }
 
   setBaseVolume(volume: number): void {
     this.baseVolume = Math.max(0, Math.min(1, volume));
@@ -165,6 +175,13 @@ export class TtsPile {
     const clean = textForSpeech(text);
     if (!clean) return;
     this.queue.push(clean);
+    void this.drain();
+  }
+
+  /** Queue a line exactly as given — an agent audio stream's marker (docs/47), not text to clean up. */
+  enqueueRaw(line: string): void {
+    if (!line) return;
+    this.queue.push(line);
     void this.drain();
   }
 
@@ -226,6 +243,7 @@ export class TtsPile {
   /** User submitted a new turn — discard unsplayed queue and return heard snapshot. */
   finalizeBargeInOnSubmit(): TtsInterruptSnapshot {
     const snap = this.buildInterruptSnapshot();
+    this.discard([...this.bargeInResumeQueue, ...this.queue]);
     this.bargeInPaused = false;
     this.bargeInResumeQueue = [];
     this.queue.length = 0;
@@ -278,6 +296,7 @@ export class TtsPile {
       not_spoken: notSpoken,
     };
 
+    this.discard([...(this.currentLine ? [this.currentLine] : []), ...this.queue, ...this.bargeInResumeQueue]);
     this.queue.length = 0;
     this.draining = false;
     this.currentLine = null;
