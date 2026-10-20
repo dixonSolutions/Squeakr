@@ -22,6 +22,13 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { listenerBlock, chargeAwayBudget, isListening } from '../../state/awayPolicy.js';
 import { pendingCount } from '../../state/sessionMailbox.js';
+import {
+  attachedCount,
+  describeMediaForAgent,
+  isAttachTarget,
+  takeAttachedMedia,
+  turnImageBlocks,
+} from '../../media/delivery.js';
 import { childLogger } from '../../log.js';
 
 const log = childLogger('mcp:listener-envelope');
@@ -31,6 +38,8 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
 interface TextContent {
   type: string;
   text?: string;
+  data?: string;
+  mimeType?: string;
 }
 
 interface ToolResult {
@@ -84,6 +93,22 @@ export function attachListenerToResult(
       payload['pending_messages_message'] =
         `The user sent ${waiting} message${waiting === 1 ? '' : 's'} into this session while you ` +
         'were working. Call check_messages() now — they may change what they want.';
+    }
+  }
+
+  /**
+   * Attached media (docs/46): files the user put into the conversation while
+   * the voice agent was working. Same channel as the mailbox — the next
+   * Squeakr tool result — with the pictures appended when asked for inline.
+   */
+  if (attachedCount() > 0 && isAttachTarget(sessionKey)) {
+    const staged = takeAttachedMedia();
+    if (staged) {
+      payload['attached_media'] = describeMediaForAgent(staged.assets, staged.delivery, 'attach');
+      payload['attached_media_ids'] = staged.assets.map((a) => a.id);
+      const blocks = turnImageBlocks({ ids: staged.assets.map((a) => a.id), delivery: staged.delivery });
+      if (blocks.length > 0) res!.content!.push(...blocks);
+      log.info({ tool: name, files: staged.assets.length, images: blocks.length / 2 }, 'attached media delivered on a tool result');
     }
   }
 

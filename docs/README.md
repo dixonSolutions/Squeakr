@@ -54,6 +54,7 @@ MCP tool layer drives worker agents on projects hosted on a home machine.
 | [`43-package-repos.md`](./43-package-repos.md) | Signed apt/dnf repositories on GitHub Pages: setup, signing key, rotation, user install | Package repos, signing key, release publishing |
 | [`44-channels.md`](./44-channels.md) | Discord / Telegram / Slack / WhatsApp as remote access: Discord voice calls, voice messages, the `@Squeakr` command line, default sessions per conversation, platform research, Bedrock S2S answer | Channels, #93 |
 | [`45-rename-squeakr.md`](./45-rename-squeakr.md) | AgentVoice → Squeakr: everything renamed, what an old install keeps reading, `scripts/migrate-to-squeakr.sh` and `squeakr upgrade-from-agentvoice` for npm / .deb / .rpm / clones, the final 0.1.6 hand-over and the release order | Upgrading an AgentVoice install, releasing the rename |
+| [`46-media-pipe.md`](./46-media-pipe.md) | Images, video and voice memos from the phone to the agent: upload button, new turn vs attach to the current one, by path vs straight into the chat (`view_media`, MCP image blocks), automatic transcripts and video frames, which CLIs take pictures | Sending files to the agent, transcripts of recordings, or inline images |
 | [`47-agent-audio-streams.md`](./47-agent-audio-streams.md) | The agent pipes its own audio to the user: `audio_stream_*` tools, queue vs async, owned streams closed in bulk, stream logs, the `agent_audio` frames | Sound effects, recordings or live PCM from the agent, or touching the phone's speech queue |
 
 ## One-paragraph summary

@@ -47,6 +47,8 @@ Prefer `spawn_agent()` for anything that takes more than a quick lookup or singl
 - `show_images(images, duration_ms?, caption?)` — push UI screenshots to the phone carousel (non-blocking)
 - `audio_stream_open(label?, mode?, path?, close?)` / `audio_stream_write` / `audio_stream_close` — play your own audio (files or raw PCM packets; one file = one call with `close: true`); `queue` waits in line with speech, `async` plays at once under it; close several or `all` at once; `audio_stream_log` reads and annotates what played
 
+**Files from the user:** a turn (or an `attached_media` field on any Squeakr result) can carry uploads from the phone — images, video, recordings. The text lists each file's path and, for recordings and video sound, the automatic transcript. Open files by path; `view_media(ids)` shows images and video frames in this chat when they are not already there. `attached_media` is context for the work in flight, not a new request.
+
 **Browser / UI workflow (opt-in):**
 - Set `browser: true` on `spawn_agent` for UI tasks or when the user says "Browser"
 - Worker uses browser tools, lists screenshot paths in its summary

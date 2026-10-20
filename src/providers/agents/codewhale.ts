@@ -683,6 +683,9 @@ export const codewhaleProvider: AgentProvider = {
    * contract exists to prevent.
    */
   supportedModes: (): readonly AgentMode[] => ['agent', 'ask'],
+  // Not known to forward MCP image blocks to the model — declared off, so
+  // inline sends fall back to paths, which Codewhale opens like any file.
+  mediaInput: () => ({ mcpImageResults: false, note: 'Pictures are handed over by path — Codewhale opens them as files.' }),
 
   parseStreamEvent: parseCodewhaleEvent,
   ensureMcpRegistration: ensureCodewhaleMcpRegistration,

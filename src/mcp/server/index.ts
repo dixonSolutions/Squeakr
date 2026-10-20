@@ -23,6 +23,7 @@
  *   User display — show_images, send_files
  *   Audio out    — audio_stream_open, audio_stream_write, audio_stream_close,
  *                  audio_stream_list, audio_stream_log (docs/47)
+ *   User media   — view_media (uploads from the phone, docs/46)
  *   User interact — request_user_input, submit_plan_for_approval
  *
  * Deprecated aliases kept for one release (docs/40 §2): agent_submit →
@@ -84,6 +85,8 @@ import {
   closeAgentAudioOwner,
 } from './audioStreamToolHandlers.js';
 import { voiceTurnQueue } from './turnQueue.js';
+import { handleViewMedia } from './mediaToolHandlers.js';
+import { turnImageBlocks } from '../../media/delivery.js';
 import {
   approvalPolicy,
   isListening,
@@ -195,7 +198,13 @@ function buildMcpServer(sessionKey: string): McpServer {
     },
     async ({ timeout_ms }) => {
       const result = await handleNextVoiceTurn({ timeout_ms });
-      return voiceToolResponse({ ...result });
+      const response = voiceToolResponse({ ...result });
+      // Pictures the user sent with this turn, straight into the chat (docs/46).
+      if (result.media_ids && result.media_delivery) {
+        const blocks = turnImageBlocks({ ids: result.media_ids, delivery: result.media_delivery });
+        (response.content as unknown[]).push(...blocks);
+      }
+      return response;
     },
   );
 
@@ -967,6 +976,17 @@ function buildMcpServer(sessionKey: string): McpServer {
   // ── User display ─────────────────────────────────────────────────────────
 
   server.tool(
+    'view_media',
+    'See files the user uploaded from their phone (images, video frames) as images in this chat, and read ' +
+      'recording transcripts. Turns that carry uploads list the ids. Raw files stay on disk at the listed paths; ' +
+      'this tool only shows them. Videos come back as still frames plus their sound transcript.',
+    {
+      ids: z.array(z.string().min(1)).min(1).max(12).describe('Media ids from the turn text or media_ids.'),
+    },
+    async ({ ids }) => handleViewMedia({ ids }),
+  );
+
+  server.tool(
     'show_images',
     'Push images to the user\'s phone as a browsable carousel (non-blocking). ' +
       'Use after browser snapshots or when the user needs to see UI. ' +
@@ -1569,5 +1589,5 @@ export function registerMcpServer(app: FastifyInstance): void {
     await reply.code(204).send();
   });
 
-  log.info('mcp server registered at /mcp (49 tools)');
+  log.info('mcp server registered at /mcp (50 tools)');
 }

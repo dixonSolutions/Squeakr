@@ -78,6 +78,7 @@ Parallel Agents capability exposed via voice.
 | Tool | Purpose |
 | --- | --- |
 | `show_images(images, duration_ms?, caption?)` | Push image carousel to PWA. New batch replaces old. See [`18-image-carousel.md`](./18-image-carousel.md). |
+| `view_media(ids)` | See what the user uploaded from the phone — images and video frames as image blocks, paths and recording transcripts as text. See [`46-media-pipe.md`](./46-media-pipe.md). |
 
 ### Group: Audio out (non-blocking)
 

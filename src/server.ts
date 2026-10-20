@@ -66,6 +66,7 @@ import { getPendingApprovals } from './mcp/server/approvalRegistry.js';
 import { registerPushRoutes } from './routes/push.js';
 import { registerApprovalRoutes } from './routes/approvals.js';
 import { registerTurnRoutes } from './routes/turns.js';
+import { registerMediaRoutes } from './routes/media.js';
 import { registerToolRoutes } from './routes/tools.js';
 import { registerWorkspaceRoutes } from './routes/workspace.js';
 import { registerEventsSocket } from './routes/eventsSocket.js';
@@ -354,6 +355,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   registerPushRoutes(app);
   await registerApprovalRoutes(app);
   await registerTurnRoutes(app);
+  await registerMediaRoutes(app);
   await registerToolRoutes(app);
   registerWorkspaceRoutes(app);
   // Desk clients (VS Code / Cursor extension) — multi-client, never displaces the phone.

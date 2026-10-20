@@ -281,6 +281,11 @@ Use `freetext` when you need something specific — a name, a description, a pre
 | `submit_plan_for_approval(title, steps, impact?)` | Show plan card to user — blocks until decision. |
 | `show_images(images, duration_ms?, caption?)` | Push images to phone carousel — non-blocking; new batch replaces old. |
 | `audio_stream_open(label?, mode?, path?, close?)` (+ `audio_stream_write`, `audio_stream_close`) | Play your own audio (sounds, recordings, PCM). One file = one call: `audio_stream_open({ path, close: true })`. `mode: "queue"` waits in line with speech; `"async"` plays at once under it. `audio_stream_list` / `audio_stream_log` show what played. |
+| `view_media(ids)` | See what the user uploaded (images, video frames) in this chat; ids come with the turn. |
+
+### Files the user sends
+
+A turn can carry uploads from the phone. The turn text lists every file with its path on this machine; recordings and videos also come with an automatic transcript (the raw file is always there too, if the transcript looks wrong). With `media_delivery: "inline"` the pictures arrive as images in the same result; otherwise open them by path, or call `view_media(ids)`. An `attached_media` field on any Squeakr result is context the user added while you worked — fold it in, do not treat it as a new request.
 
 ### Showing UI to the user (Browser workflow)
 

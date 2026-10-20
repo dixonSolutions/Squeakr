@@ -73,6 +73,11 @@ jobs:
       - name: End to end — agent audio streams
         run: node scripts/live-agent-audio-test.mjs
 
+      # Uploads, transcripts, view_media, and media reaching the stub agent as
+      # a turn, inline in next_voice_turn, and attached mid-work (docs/46).
+      - name: End to end — media pipe
+        run: node scripts/live-media-pipe-test.mjs
+
   pwa-stream:
     name: PWA direct stream (headless Chromium)
     runs-on: ubuntu-latest
