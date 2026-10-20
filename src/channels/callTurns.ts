@@ -19,8 +19,10 @@
  *                           phrase, after turnSubmit.silenceMs with nothing new.
  *                       The cancel phrase drops the capture (wake words on).
  *
- * The phone spots phrases with Vosk on the raw audio; a call has a server
- * transcript, so phrases are matched in the text with the same normalisation.
+ * The phone spots phrases with Vosk on the raw audio. A call does too, for
+ * the start phrase (wakeSpotter.ts → `open()`), so the capture opens while the
+ * phrase is said; the rest is matched in the server transcript with the same
+ * normalisation.
  */
 
 import { normalizeForWakeMatch } from '../realtime/wakeWordMatch.js';
@@ -28,7 +30,7 @@ import { normalizeForWakeMatch } from '../realtime/wakeWordMatch.js';
 export interface CallTurnSettings {
   inputMode: 'turns' | 'stream';
   wakeWordsEnabled: boolean;
-  wakeWords: { start: string; end?: string; cancel?: string };
+  wakeWords: { start: string; end?: string; cancel?: string; wakeConfidenceThreshold?: number };
   turnSubmit: { silenceMs: number; vadEnabled?: boolean };
 }
 
@@ -57,6 +59,39 @@ function find(original: string[], phrase: string[]): { start: number; end: numbe
   return null;
 }
 
+/** Edit distance, for a start phrase the transcript spelled differently than Vosk heard it. */
+function distance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = row[0]!;
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const up = row[j]!;
+      row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = up;
+    }
+  }
+  return row[b.length]!;
+}
+
+/**
+ * Where a start phrase the audio spotter heard ends in a transcript that did
+ * not spell it right ("Hey Squeaker" → "Hey, squeaker." matches already; "hey
+ * squeaking" does not): the first word near enough to the phrase's last word,
+ * among the first few. 0 when there is none — then nothing is cut.
+ */
+export function misheardPhraseEnd(original: string[], phrase: string[]): number {
+  const last = phrase[phrase.length - 1];
+  if (!last) return 0;
+  const near = Math.max(1, Math.floor(last.length / 2));
+  const look = Math.min(original.length, phrase.length + 2);
+  for (let i = 0; i < look; i++) {
+    const w = normalizeForWakeMatch(original[i]!);
+    if (w && distance(w, last) <= near) return i + 1;
+  }
+  return 0;
+}
+
 const tidy = (ws: string[]) => ws.join(' ').replace(/^[\s,.:;!?-]+|[\s,.:;!?-]+$/g, '');
 
 /** How to talk to a call with these settings, in one spoken sentence (empty when anything goes). */
@@ -72,6 +107,8 @@ export class CallTurns {
   private openedAt: number | null = null;
   private readonly held: string[] = [];
   private timer: NodeJS.Timeout | null = null;
+  /** The spotter heard the start phrase; the next transcript is the utterance it was in. */
+  private spotted = false;
 
   constructor(
     readonly settings: CallTurnSettings,
@@ -101,16 +138,33 @@ export class CallTurns {
     return this.openedAt !== null;
   }
 
+  /**
+   * The start phrase was heard on the audio itself (wakeSpotter.ts), before
+   * any transcript: open the capture now. The transcript that follows is the
+   * same utterance — its copy of the phrase is cut, even misspelled.
+   */
+  open(): void {
+    if (!this.wakeWords) return;
+    this.reset();
+    this.openedAt = this.now();
+    this.spotted = true;
+  }
+
   feed(text: string): TurnVerdict {
     if (this.settings.inputMode === 'stream') return text.trim() ? { action: 'deliver', text: text.trim() } : { action: 'ignore' };
     let ws = text.split(/\s+/).filter(Boolean);
+    const spotted = this.spotted;
+    this.spotted = false;
 
     if (this.wakeWords) {
-      const start = find(ws, words(this.settings.wakeWords.start));
+      const phrase = words(this.settings.wakeWords.start);
+      const start = find(ws, phrase);
       if (start) {
         this.reset();
         this.openedAt = this.now();
         ws = ws.slice(start.end);
+      } else if (spotted && this.capturing) {
+        ws = ws.slice(misheardPhraseEnd(ws, phrase));
       } else if (!this.capturing) {
         return { action: 'ignore' };
       }
@@ -164,6 +218,7 @@ export class CallTurns {
   }
 
   private reset(): void {
+    this.spotted = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.held.length = 0;

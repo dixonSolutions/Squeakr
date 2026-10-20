@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import type { PcmStream } from '../providers/speech/output/types.js';
 import { VoiceCall } from './voiceCall.js';
+import type { SpotterFactory } from './wakeSpotter.js';
 
 /** 16 kHz speech-loud tone. */
 function speech(ms: number): Buffer {
@@ -204,7 +205,7 @@ describe('VoiceCall', () => {
 });
 
 describe('VoiceCall — like the phone', () => {
-  function rich(wake: boolean) {
+  function rich(wake: boolean, spotter: SpotterFactory | null = null, heard?: string) {
     const played: number[] = [];
     const mirrored: Array<Record<string, unknown>> = [];
     const activity: string[] = [];
@@ -224,7 +225,7 @@ describe('VoiceCall — like the phone', () => {
       },
       onActivity: (l) => activity.push(l),
       deps: {
-        transcribe: async () => ({ text: wake ? 'hey squeaker run the tests' : 'run the tests' }),
+        transcribe: async () => ({ text: heard ?? (wake ? 'hey squeaker run the tests' : 'run the tests') }),
         deliver: (text) => {
           delivered.push(text);
           return { ok: true, delivery: 'spawn' };
@@ -248,6 +249,7 @@ describe('VoiceCall — like the phone', () => {
           turnSubmit: { silenceMs: 700, vadEnabled: true },
         }),
         mirror: (frame) => mirrored.push(frame),
+        spotter: async () => spotter,
       },
     });
     return { call, played, activity, delivered, synthesized, mirrored, emit: (p: unknown) => send?.(p) };
@@ -326,5 +328,71 @@ describe('VoiceCall — like the phone', () => {
       'reply:agent:All green.',
       'ended',
     ]);
+  });
+
+  /** A spotter that "hears" the start phrase in the first audio after each reset. */
+  const fakeSpotter = (): { factory: SpotterFactory; pushes: () => number } => {
+    let pushes = 0;
+    const factory: SpotterFactory = (opts) => {
+      let fired = false;
+      return {
+        push() {
+          pushes++;
+          if (!fired) {
+            fired = true;
+            opts.onMatch('hey squeaker');
+          }
+        },
+        reset() {
+          fired = false;
+        },
+        close() {},
+      };
+    };
+    return { factory, pushes: () => pushes };
+  };
+
+  it('cues the start phrase as soon as the audio spotter hears it, before any transcript', async () => {
+    const spot = fakeSpotter();
+    const h = rich(true, spot.factory);
+    h.call.start();
+    await flush(20);
+    const cuesBefore = h.mirrored.filter((f) => f['event'] === 'cue' && f['cue'] === 'listening').length;
+    h.call.pushAudio('u1', 'Ana', speech(100));
+    // Heard while still talking: no pause, no transcript yet.
+    const armed = h.mirrored.filter((f) => f['event'] === 'heard' && f['state'] === 'armed');
+    assert.equal(armed.length, 1);
+    assert.equal(h.mirrored.filter((f) => f['event'] === 'cue' && f['cue'] === 'listening').length, cuesBefore + 1);
+    assert.ok(spot.pushes() > 0);
+
+    h.call.pushAudio('u1', 'Ana', speech(500));
+    h.call.speakerPaused('u1');
+    await flush(50);
+    assert.deepEqual(h.delivered, ['run the tests']);
+    // The transcript finished the request without cueing it a second time.
+    assert.equal(h.mirrored.filter((f) => f['event'] === 'cue' && f['cue'] === 'listening').length, cuesBefore + 1);
+    await h.call.close();
+  });
+
+  it('a spotted phrase the transcript misspelled is still cut from the request', async () => {
+    const h = rich(true, fakeSpotter().factory, 'Hey squeaking, run the tests.');
+    h.call.start();
+    await flush(20);
+    h.call.pushAudio('u1', 'Ana', speech(600));
+    h.call.speakerPaused('u1');
+    await flush(50);
+    assert.deepEqual(h.delivered, ['run the tests']);
+    await h.call.close();
+  });
+
+  it('without a spotter, the phrase is matched in the transcript as before', async () => {
+    const h = rich(true, null);
+    h.call.start();
+    await flush(20);
+    h.call.pushAudio('u1', 'Ana', speech(600));
+    h.call.speakerPaused('u1');
+    await flush(50);
+    assert.deepEqual(h.delivered, ['run the tests']);
+    await h.call.close();
   });
 });
