@@ -72,19 +72,25 @@ ever receives filesystem paths:
 - Secrets are isolated in `.env` (keys only); settings + project list live in
   non-secret `config.json` (see `07`).
 
-### Image carousel (`show_images`)
+### Shown media (`show_media`, `show_images`)
 
-UI screenshots are served through `GET /api/images/:id?k=<ephemeral-key>` — **not**
-the long-lived app token, because `<img>` cannot send `Authorization` headers.
+Images, video and audio the agent shows are served through
+`GET /api/display/:id?k=<item-key>` — **not** the long-lived app token, because
+`<img>` / `<video>` cannot send `Authorization` headers.
 
-1. **Ephemeral key** — each `show_images` batch gets a random UUID access key (30 min TTL).
-   The endpoint rejects missing/wrong/expired keys (401/404).
+1. **Per-item key** — every item gets its own random UUID key, valid until the item
+   self-destructs (default 30 min, agent-chosen 5 s – 24 h), is removed, or the voice
+   session ends (`"never"` items included). Missing/wrong keys get 401/404.
 2. **Path allowlist** — `path` items must resolve under enabled project directories,
-   OS temp, `~/.cursor`, or bridge `data/`. Traversal via `../` is blocked.
-3. **No persistent URLs** — keys are in-memory only; batch cleared on control WS disconnect.
-4. **Size limits** — max 10 images per batch, 4 MB decoded per base64 item.
+   OS temp, `~/.cursor`, bridge `data/`, or the uploads folder beside the database
+   (`<dirname(DB_PATH)>/media`). Both sides are compared as **real paths**,
+   so `../` traversal and symlinks pointing out of a root are refused; the check is
+   repeated on every request.
+3. **No persistent URLs** — keys are in-memory only; a bridge restart drops them.
+4. **Size limits** — 10 items per call, 50 shown at once, 4 MB decoded per base64 item.
+   Files stream from disk (Range requests), never read whole into memory.
 
-Full design: [`18-image-carousel.md`](./18-image-carousel.md).
+Full design: [`48-show-media.md`](./48-show-media.md).
 
 ### Why the prompt string is acceptable model-controlled input
 

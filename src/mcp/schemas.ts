@@ -200,22 +200,113 @@ export const ShowImagesSchema = z.object({
     .array(imageItemSchema)
     .min(1)
     .max(10)
-    .describe('Images to show — a new call replaces the previous carousel'),
+    .describe('Images to show — a new call replaces the previous show_images batch'),
   duration_ms: z
     .number()
     .int()
     .min(3000)
     .max(120_000)
     .optional()
-    .describe('How long the carousel stays expanded before minimizing (default 8000 ms)'),
+    .describe('How long they stay fullscreen before closing to the media button (default 8000 ms)'),
   caption: z
     .string()
     .max(300)
     .optional()
-    .describe('Optional title shown above the carousel'),
+    .describe('Optional line for the batch (push notification text)'),
   /** Internal: send_files already published these as agent_files. */
   publish: z.boolean().optional(),
 });
+
+const mediaItemSchema = z
+  .object({
+    path: z.string().min(1).optional().describe('Local file under a project or the temp directory'),
+    url: z.string().min(1).optional().describe('http(s) URL — loaded directly by the phone'),
+    data: z.string().min(1).optional().describe('Base64 or data-URI payload (max 4 MB — use path for bigger files)'),
+    kind: z
+      .enum(['image', 'video', 'audio'])
+      .optional()
+      .describe('image | video | audio — detected from mime / extension when omitted'),
+    mime: z.string().optional().describe('MIME type when the extension does not say'),
+    caption: z.string().max(500).optional().describe('Short label for this item'),
+    name: z.string().max(200).optional().describe('File name shown to the user'),
+    live: z
+      .boolean()
+      .optional()
+      .describe(
+        'The file (path only, audio or video) is still being written — e.g. by another agent rendering it now. ' +
+          'The phone streams it as it grows; call media_control(finish) when the file is complete.',
+      ),
+  })
+  .refine((item) => [item.path, item.url, item.data].filter((v) => v != null && v !== '').length === 1, {
+    message: 'Each item must have exactly one of path, url, or data',
+  });
+
+/** Raw shape — the MCP server registers it as-is (McpServer.tool takes a shape, not a refined object). */
+export const ShowMediaShape = {
+  items: z
+    .array(mediaItemSchema)
+    .min(1)
+    .max(10)
+    .describe('Images, videos and audio to show. Added to what is already shown unless replace is true.'),
+  display: z
+    .enum(['fullscreen', 'tray'])
+    .optional()
+    .describe(
+      'fullscreen (default): the first item opens on the user\'s screen as the raw media with a close icon. ' +
+        'tray: added quietly to the media button for the user to open.',
+    ),
+  autoplay: z
+    .boolean()
+    .optional()
+    .describe('Start video / audio playing at once — only with display "fullscreen".'),
+  muted: z.boolean().optional().describe('Start muted (the user taps to unmute).'),
+  loop: z.boolean().optional().describe('Loop video / audio.'),
+  auto_close_ms: z
+    .number()
+    .int()
+    .min(1000)
+    .max(3_600_000)
+    .optional()
+    .describe('Close fullscreen after this long on screen, unless the user closes it first. Only with "fullscreen".'),
+  close_on_end: z
+    .boolean()
+    .optional()
+    .describe('Close fullscreen when the video / audio finishes playing. Only with "fullscreen".'),
+  self_destruct: z
+    .union([z.number().int().min(5).max(86_400), z.literal('never')])
+    .optional()
+    .describe(
+      'Seconds until the items are deleted from the user\'s phone and the bridge (5–86400, default 1800), ' +
+        'or "never" — kept for as long as the voice session lives.',
+    ),
+  caption: z.string().max(300).optional().describe('Optional line for the whole batch (push notification text)'),
+  replace: z.boolean().optional().describe('Remove everything shown before first (default false).'),
+  publish: z
+    .boolean()
+    .optional()
+    .describe('Also post the files to chat channels (Discord, Telegram…) when someone listens there (default true).'),
+};
+
+export const ShowMediaSchema = z.object(ShowMediaShape);
+
+export const MediaControlShape = {
+  action: z
+    .enum(['status', 'open', 'close', 'play', 'pause', 'seek', 'remove', 'finish'])
+    .describe(
+      'status: what is shown and what the phone reports (playing / paused / ended / closed, position). ' +
+        'open: show an item fullscreen. close: close fullscreen (a video keeps its frame). ' +
+        'play / pause / seek: control playback (play opens it fullscreen). ' +
+        'remove: delete items now. finish: a live file is complete — the stream ends at its last byte.',
+    ),
+  media_id: z.string().optional().describe('The item (from show_media). status without it lists everything.'),
+  media_ids: z.array(z.string()).max(50).optional().describe('remove: several items at once'),
+  all: z.boolean().optional().describe('remove: every item'),
+  autoplay: z.boolean().optional().describe('open: start playing'),
+  auto_close_ms: z.number().int().min(1000).max(3_600_000).optional().describe('open: close after this long'),
+  position_s: z.number().min(0).optional().describe('seek: position in seconds'),
+};
+
+export const MediaControlSchema = z.object(MediaControlShape);
 
 const fileItemSchema = z
   .object({
@@ -258,6 +349,8 @@ export const TOOL_SCHEMAS = {
   agent_mcp_list: AgentMcpListSchema,
   agent_mcp_tools: AgentMcpToolsSchema,
   show_images: ShowImagesSchema,
+  show_media: ShowMediaSchema,
+  media_control: MediaControlSchema,
   send_files: SendFilesSchema,
 } as const;
 

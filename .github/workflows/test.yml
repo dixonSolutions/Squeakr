@@ -5,7 +5,7 @@
 # versions a user is likely to have, then the end-to-end scripts that drive
 # the real CLI, bridge, speech-to-text path and MCP transport
 # (scripts/live-pipe-test.mjs) and the real PWA in headless Chromium
-# (scripts/live-pwa-stream-test.mjs).
+# (scripts/live-pwa-stream-test.mjs, scripts/live-show-media-test.mjs).
 name: test
 
 on:
@@ -102,6 +102,11 @@ jobs:
           npm install --no-save --no-audit --no-fund --legacy-peer-deps playwright@1.61.1
           npx playwright install --with-deps chromium
 
+      # Makes the media fixtures for the show_media test (libvpx, libopus,
+      # libmp3lame) — installed before the tests so any of them can use it.
+      - name: ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       # Switches Input mode through the Config screen, streams Chrome's fake
       # microphone, and checks the agent heard and answered.
       - name: PWA streams its mic to the agent
@@ -111,3 +116,8 @@ jobs:
       # queue vs async ordering against speak(), packets, stop, dry streams.
       - name: PWA plays agent audio streams
         run: node scripts/live-pwa-agent-audio-test.mjs
+
+      # Images, video and audio on the phone (docs/48): raw fullscreen,
+      # autoplay, remembered frames, auto-close, self-destruct, live files.
+      - name: PWA shows the agent's media
+        run: node scripts/live-show-media-test.mjs
