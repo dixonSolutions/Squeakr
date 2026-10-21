@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import type { Readable } from 'node:stream';
 import { describe, it } from 'node:test';
 import { monoToStereoPcm16, OpusEncoder } from '../audio.js';
+import type { CallDenoiser, DenoiserFactory } from '../denoise.js';
 import { DiscordCall } from './discordVoice.js';
 
 /**
@@ -74,7 +75,7 @@ function opusPackets(ms: number): Buffer[] {
 
 const flush = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
-function makeCall(allowed: string[]) {
+function makeCall(allowed: string[], denoiser: DenoiserFactory | null = null) {
   const v = fakeVoice();
   const heard: Array<{ seconds: number }> = [];
   const delivered: string[] = [];
@@ -88,6 +89,7 @@ function makeCall(allowed: string[]) {
     isAllowed: (id) => allowed.includes(id),
     nameOf: (id) => (id === 'u1' ? 'Ana' : id),
     silenceMs: 700,
+    denoiser: async () => denoiser,
     callDeps: {
       transcribe: async (pcm) => {
         heard.push({ seconds: pcm.length / 2 / 16_000 });
@@ -133,6 +135,38 @@ describe('DiscordCall', () => {
     assert.ok(Math.abs(heard[0]!.seconds - 1) < 0.05, `16 kHz audio the length of what was said: ${heard[0]!.seconds}s`);
     await call.leave();
     assert.equal(v.connection.destroyed, true);
+  });
+
+  it('denoises each member with their own suppressor, kept for the whole call', async () => {
+    const made: Array<{ samples: number; closed: number }> = [];
+    const factory: DenoiserFactory = () => {
+      const d = { samples: 0, closed: 0 };
+      made.push(d);
+      return {
+        process(pcm: Buffer) {
+          d.samples += pcm.length >> 1;
+          return pcm;
+        },
+        close() {
+          d.closed++;
+        },
+      } as unknown as CallDenoiser;
+    };
+    const { v, call, delivered } = makeCall(['u1'], factory);
+    await call.join();
+    await flush();
+    for (let turn = 0; turn < 2; turn++) {
+      v.speaking.emit('start', 'u1');
+      const stream = v.streams.get('u1')!;
+      for (const p of opusPackets(400)) stream.emit('data', p);
+      stream.emit('end');
+      await flush();
+    }
+    assert.equal(made.length, 1, 'one suppressor across both utterances');
+    assert.equal(made[0]!.samples, 2 * 0.4 * 48_000, 'every 48 kHz mono sample went through it');
+    assert.equal(delivered.length, 2);
+    await call.leave();
+    assert.equal(made[0]!.closed, 1);
   });
 
   it('ignores members who are not on the allowlist', async () => {

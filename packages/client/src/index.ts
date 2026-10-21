@@ -6,4 +6,6 @@ export type { EventSocketOptions, SocketStatus, WebSocketCtor, WebSocketLike } f
 export { ReadAlongModel, splitWords, wordIndexAtChar } from './readAlong.js';
 export type { PacingOptions, ReadAlongSnapshot, Segment, SegmentRole, SegmentState } from './readAlong.js';
 export * from './wakeWords.js';
+export * from './wakeSpotting.js';
+export { WAKE_DECOYS } from './wakeDecoys.js';
 export * from './cues.js';

@@ -1,7 +1,11 @@
 /**
  * Offline grammar-restricted phrase spotting via vosk-browser (WASM).
  *
- * Used for wake (start) and submit (end) phrases. Shares one cached model load.
+ * Used for the wake (start), submit (end) and cancel phrases. Shares one
+ * cached model load. What counts as hearing a phrase — the grammar with its
+ * decoy words, word confidence, where the phrase sits, how long a partial
+ * match must hold — is @squeakr/client's wakeSpotting.ts, the same rule calls
+ * use on the bridge (docs/50).
  */
 
 import type { Model } from 'vosk-browser';
@@ -9,7 +13,14 @@ import { getSharedAudioContext, unlockAudioContext, connectSilentSink } from './
 import { acquireMic, type MicLease } from './mic-service.js';
 import { isCrossOriginIsolated, voskCoopError } from './cross-origin-isolation.js';
 import { loadVoskModel } from './vosk-model-cache.js';
-import { normalizeForWakeMatch } from './wake-words.js';
+import {
+  normalizeForWakeMatch,
+  PhraseDecision,
+  spottingGrammar,
+  spottingRule,
+  WAKE_PARTIAL_MATCH_THRESHOLD,
+  type PhraseRole,
+} from './wake-words.js';
 
 export { VOSK_MODEL_URL } from './model-download.js';
 export const VOSK_SAMPLE_RATE = 16000;
@@ -24,38 +35,42 @@ export interface VoskGrammarSpotterCallbacks {
 }
 
 export function buildVoskGrammar(phrase: string): string {
-  const word = normalizeForWakeMatch(phrase) || phrase.trim().toLowerCase();
-  return JSON.stringify([word, '[unk]']);
+  return JSON.stringify(spottingGrammar(phrase));
 }
 
-/** True when Vosk heard the full grammar phrase (exact or trailing in an utterance). */
+/** True when what Vosk heard holds the whole phrase, as whole words. */
 export function voskPhraseMatches(heard: string, phrase: string): boolean {
   const normHeard = normalizeForWakeMatch(heard);
   const normPhrase = normalizeForWakeMatch(phrase);
   if (!normPhrase || !normHeard) return false;
-  if (normHeard === normPhrase) return true;
-  return normHeard.endsWith(` ${normPhrase}`);
+  return ` ${normHeard} `.includes(` ${normPhrase} `);
 }
 
 export interface VoskSpotterStartOptions {
   mediaStream?: MediaStream;
   /** When false, only final results fire onMatch (recommended for submit/end phrase). */
   matchPartial?: boolean;
-  /** Minimum mean Vosk word confidence for final-result matching. */
+  /** The wake-sensitivity setting (0–1, lower is more sensitive) — see spottingRule. */
   minimumConfidence?: number;
+  /**
+   * What the phrase does, which decides where it may sit in what was said.
+   * Default: `start` when partial matches are allowed, else `end` (the
+   * submit and cancel spotters, which close what was said).
+   */
+  role?: PhraseRole;
 }
 
-/** Partial results lack per-word confidence — enable them only at lower thresholds. */
-export const WAKE_PARTIAL_MATCH_THRESHOLD = 0.55;
+export { WAKE_PARTIAL_MATCH_THRESHOLD };
 
 /** Convert wake confidence threshold (0–1) into concrete Vosk spotter behavior. */
 export function wakeSpotterOptions(
   threshold = 0.45,
-): Pick<VoskSpotterStartOptions, 'matchPartial' | 'minimumConfidence'> {
+): Pick<VoskSpotterStartOptions, 'matchPartial' | 'minimumConfidence' | 'role'> {
   const minimumConfidence = Math.min(1, Math.max(0, threshold));
   return {
     matchPartial: minimumConfidence < WAKE_PARTIAL_MATCH_THRESHOLD,
     minimumConfidence,
+    role: 'start',
   };
 }
 
@@ -73,8 +88,9 @@ export class VoskGrammarSpotter {
   private paused = false;
   private phrase = '';
   private triggered = false;
-  private matchPartial = true;
-  private minimumConfidence = 0;
+  private decision: PhraseDecision | null = null;
+  /** Audio fed to the recognizer since the last (re)start, in ms. */
+  private fedMs = 0;
 
   constructor(private readonly cb: VoskGrammarSpotterCallbacks) {}
 
@@ -96,8 +112,10 @@ export class VoskGrammarSpotter {
     this.phrase = normalizeForWakeMatch(phrase) || phrase.trim().toLowerCase();
     this.triggered = false;
     this.paused = false;
-    this.matchPartial = opts.matchPartial ?? true;
-    this.minimumConfidence = opts.minimumConfidence ?? 0;
+    this.fedMs = 0;
+    const role = opts.role ?? (opts.matchPartial === false ? 'end' : 'start');
+    const rule = spottingRule(role, opts.minimumConfidence);
+    this.decision = new PhraseDecision(this.phrase, { ...rule, matchPartial: rule.matchPartial && opts.matchPartial !== false });
     this.cb.onStatus?.('Loading Vosk model…');
 
     await unlockAudioContext();
@@ -108,22 +126,15 @@ export class VoskGrammarSpotter {
     this.recognizer.setWords(true);
 
     this.recognizer.on('result', (message) => {
-      if (message.event === 'result') {
-        const words = message.result.result ?? [];
-        const confidence =
-          words.length > 0
-            ? words.reduce((sum, word) => sum + word.conf, 0) / words.length
-            : null;
-        this.handleRecognition(message.result.text, true, confidence);
-      }
+      if (message.event !== 'result' || this.triggered || !this.decision) return;
+      const words = (message.result.result ?? []).map((w) => ({ word: w.word, conf: w.conf }));
+      if (this.decision.final(words)) this.fire(message.result.text);
     });
     this.recognizer.on('partialresult', (message) => {
       if (message.event !== 'partialresult') return;
       const partial = message.result.partial ?? '';
       this.cb.onPartial?.(partial);
-      if (this.matchPartial) {
-        this.handleRecognition(partial, false);
-      }
+      if (!this.triggered && this.decision?.partial(partial, this.fedMs)) this.fire(partial);
     });
 
     if (opts.mediaStream) {
@@ -147,6 +158,7 @@ export class VoskGrammarSpotter {
     this.processor = ctx.createScriptProcessor(4096, 1, 1);
     this.processor.onaudioprocess = (event) => {
       if (!this.running || this.paused || !this.recognizer) return;
+      this.fedMs += event.inputBuffer.duration * 1000;
       try {
         this.recognizer.acceptWaveform(event.inputBuffer);
       } catch (err) {
@@ -171,6 +183,7 @@ export class VoskGrammarSpotter {
 
   resetTrigger(): void {
     this.triggered = false;
+    this.decision?.reset();
   }
 
   /** Mic stream used by this spotter (for mute registration). */
@@ -200,20 +213,7 @@ export class VoskGrammarSpotter {
     this.stop();
   }
 
-  private handleRecognition(
-    text: string | undefined,
-    fromFinal: boolean,
-    confidence: number | null = null,
-  ): void {
-    if (this.triggered || !text?.trim()) return;
-    if (!voskPhraseMatches(text, this.phrase)) return;
-    if (
-      fromFinal &&
-      this.minimumConfidence > 0 &&
-      (confidence === null || confidence < this.minimumConfidence)
-    ) {
-      return;
-    }
+  private fire(text: string): void {
     this.triggered = true;
     this.cb.onMatch?.(this.phrase, text.trim());
   }
