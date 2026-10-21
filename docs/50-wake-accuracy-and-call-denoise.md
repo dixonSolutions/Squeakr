@@ -99,27 +99,60 @@ runs on each Discord member's 48 kHz audio before the resample to 16 kHz.
 
 ## The bench
 
-The bench lives outside the repo. It needs a local speaches container (Kokoro
-voices, Whisper) and the Vosk model.
+The bench is the `wake-noise-bench` Claude skill
+(`.claude/skills/wake-noise-bench/`): how to run it, what it needs, and how to
+test another wake phrase. Its speech is committed in `docs/data/wake-bench/`:
+398 Ogg/Opus clips generated with Kokoro voices.
 
-- **Speech:** generated with Kokoro, 28 voices split into a **dev** half (used
-  for tuning) and a **held-out** half with its own sentences.
-- **Each half contains:**
-  - wake phrases alone, with a command, and after a lead-in;
-  - 25 start-phrase and 10 end-phrase look-alikes, each said in 2 voices;
-  - everyday sentences.
-- **Noise:** 10 synthetic types mixed at a measured SNR, unfiltered and
-  through the 40% mix: mouse, keyboard, fan, vacuum, traffic, siren,
-  hammering, music, four-person chatter, and all of them at once.
+- **The clips:**
+  - 28 voices, split into a **dev** half (used for tuning) and a
+    **held-out** half with its own sentences;
+  - each half has wake phrases (alone, with a command, after a lead-in, fast),
+    25 start-phrase and 10 end-phrase look-alikes (each in 2 voices), and
+    everyday sentences;
+  - 12 spoken commands for the transcription sweep;
+  - 6 chatter clips.
+- **Noise:** 10 synthetic types, mixed at a measured SNR, unfiltered and
+  through the shipped call denoiser: mouse, keyboard, fan, vacuum, traffic,
+  siren, hammering, music, four-person chatter, and all of them at once.
 - **Engines:** the bridge's own Vosk (`vosk-koffi`, same model) and Whisper
   `base.en` (the configured provider).
 - **Scoring:** the shipped TypeScript (`PhraseDecision`, `confirmSpotted`)
   replays every recorded recognizer stream 20 ms at a time.
 
-### Dev set, new rule
+### Held-out set (unseen voices and sentences)
 
-Noise here is harsh: fan at +5 dB, vacuum and music at 0 dB, chatter at
-+10 dB, and the blanket of all noises at +5 dB.
+**Moderate noise**, closer to an ordinary room: fan at +15 dB, chatter at
++20 dB, all noises at +15 dB, music at +10 dB.
+
+| | Old rule | New rule |
+|---|---|---|
+| "hey squeaky" heard | 100% | 98.9% |
+| Look-alikes fired | 44.3% | **9.0%** |
+| Other talk fired | 1.2% | **0%** |
+| "cursor send" heard | 96.1% | 97.9% |
+| End-phrase look-alikes fired | 5.0% | **0%** |
+| On a call: wake + command delivered | 100% | 90.5% (8% refused by the transcript check) |
+| On a call: look-alikes delivered | 44.3% | **0%** (5% only re-arm listening) |
+| On a call: other talk delivered | 3.4% | **0%** |
+
+**Harsh noise**, where things break: fan at +5 dB, vacuum and music at 0 dB,
+chatter at +10 dB, all noises at +5 dB, mouse at 0 dB, plus clean audio.
+
+| | Old rule | New rule |
+|---|---|---|
+| "hey squeaky" heard | 93.4% | 85.0% (100% clean) |
+| Look-alikes fired | 42.3% | **7.1%** |
+| Other talk fired | 6.3% | **0%** |
+| "cursor send" heard | 90.3% | 81.3% |
+| End-phrase look-alikes fired | 13.8% | **4.6%** |
+| On a call: wake + command delivered | 87.3% | 56.1% |
+| On a call: look-alikes delivered | 29.6% | **0%** (2.1% only re-arm listening) |
+| On a call: other talk delivered | 4.7% | **0%** |
+
+### Dev set (harsh noise), new rule
+
+The set the rule was tuned on.
 
 | | Real "hey squeaky" | Look-alikes | Other talk |
 |---|---|---|---|
@@ -134,9 +167,10 @@ phrase in loud noise ("Hey swiki", "Face-queaking"), and the transcript check
 then refuses it. Loosening that check to 0.3 gained 4 points of hits but
 delivered 2.6% of look-alikes, so it stays at 0.2.
 
-The end phrase ("cursor send") improved less: look-alikes fire 15%, against
-18% before. Its remaining look-alikes are very close: "curse her and send
-her away", "the purse was sent back".
+On the dev set the end phrase ("cursor send") improved less: look-alikes
+fired 15%, against 18% before. Its remaining look-alikes are very close:
+"curse her and send her away", "the purse was sent back". On the held-out
+set the improvement was larger (13.8% → 4.6%).
 
 ### Noise suppression (transcription, Whisper `base.en`)
 
@@ -165,6 +199,9 @@ handles, and other people talking, since RNNoise cannot separate voices.
 - A look-alike that is short and fools both the spotter *and* the transcript
   check arms the capture: on the dev set, 1.4% of look-alikes in loud
   noise. The next utterance within 10 s is then delivered.
+- Every word of a wake phrase must be in the Vosk model's vocabulary. An
+  unknown word is dropped from the grammar and the phrase never matches:
+  "hey squeakr" is never heard.
 - A phrase that sounds like everyday words ("hey squeaky" ≈ "he squeezed") is
   harder to spot than a distinctive one. A distinctive phrase is the strongest
   defence against false wakes.
