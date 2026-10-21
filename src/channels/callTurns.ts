@@ -74,22 +74,44 @@ function distance(a: string, b: string): number {
   return row[b.length]!;
 }
 
+/** How far (edits per letter) the transcript's copy of the start phrase may stray. */
+export const CONFIRM_DISTANCE = 0.2;
+
 /**
- * Where a start phrase the audio spotter heard ends in a transcript that did
- * not spell it right ("Hey Squeaker" → "Hey, squeaker." matches already; "hey
- * squeaking" does not): the first word near enough to the phrase's last word,
- * among the first few. 0 when there is none — then nothing is cut.
+ * Whether the transcript of an utterance the audio spotter fired on really
+ * holds the start phrase, and where it ends. The spotter can still be fooled
+ * by a close look-alike ("he squeezed the lemon", "hey sweetie, dinner is
+ * ready") that the transcript then spells right (docs/50), so a spotted
+ * capture is confirmed here before anything is delivered.
+ *
+ * The phrase must open the utterance — after at most two lead-in words
+ * ("okay, hey squeaky, …") — spelled within CONFIRM_DISTANCE and starting
+ * with the phrase's first letter, however the words are split ("Hay
+ * squeaky", "heysqueaky"; not "a squeaky clean kitchen"). A short utterance
+ * (the phrase and up to two words more) that does not match is the phrase
+ * said on its own, which transcripts mangle most ("Hell is squeaky"): the
+ * speaker heard the cue and says the request next, so the capture stays
+ * open — but none of its words are delivered.
+ *
+ * Returns how many words to cut, or null when the spotter was wrong.
  */
-export function misheardPhraseEnd(original: string[], phrase: string[]): number {
-  const last = phrase[phrase.length - 1];
-  if (!last) return 0;
-  const near = Math.max(1, Math.floor(last.length / 2));
-  const look = Math.min(original.length, phrase.length + 2);
-  for (let i = 0; i < look; i++) {
-    const w = normalizeForWakeMatch(original[i]!);
-    if (w && distance(w, last) <= near) return i + 1;
+export function confirmSpotted(original: string[], phrase: string[], maxDistance = CONFIRM_DISTANCE): number | null {
+  const n = phrase.length;
+  if (!n) return null;
+  const norm = original.map((w) => normalizeForWakeMatch(w));
+  const target = phrase.join('');
+  let best: { d: number; end: number } | null = null;
+  for (let i = 0; i <= Math.min(2, norm.length - 1); i++) {
+    for (let len = Math.max(1, n - 1); len <= n + 1 && i + len <= norm.length; len++) {
+      const said = norm.slice(i, i + len).join('');
+      if (said[0] !== target[0]) continue;
+      const d = distance(said, target) / target.length;
+      if (!best || d < best.d) best = { d, end: i + len };
+    }
   }
-  return 0;
+  if (best && best.d <= maxDistance) return best.end;
+  if (original.length <= n + 2) return original.length;
+  return null;
 }
 
 const tidy = (ws: string[]) => ws.join(' ').replace(/^[\s,.:;!?-]+|[\s,.:;!?-]+$/g, '');
@@ -164,7 +186,13 @@ export class CallTurns {
         this.openedAt = this.now();
         ws = ws.slice(start.end);
       } else if (spotted && this.capturing) {
-        ws = ws.slice(misheardPhraseEnd(ws, phrase));
+        const cut = confirmSpotted(ws, phrase);
+        if (cut === null) {
+          // The spotter heard a look-alike: this was not addressed to the agent.
+          this.reset();
+          return { action: 'ignore' };
+        }
+        ws = ws.slice(cut);
       } else if (!this.capturing) {
         return { action: 'ignore' };
       }
