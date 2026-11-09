@@ -8,7 +8,9 @@
  * restricted to a grammar of the start phrase, hears it while it is being
  * said — a partial result about half a second in — so the cue plays as it does
  * on the phone. Same model the PWA downloads (serve/voskPaths.ts), same
- * grammar, same confidence threshold (settings.voice.wakeWords).
+ * grammar and the same rule for what counts as hearing the phrase
+ * (realtime/wakeSpotting.ts, the phone's rules), same sensitivity setting
+ * (settings.voice.wakeWords).
  *
  * Optional all the way: vosk-koffi (native libvosk) is an optional
  * dependency and the model may not be prepared yet. Without either, calls
@@ -20,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { childLogger } from '../log.js';
-import { normalizeForWakeMatch } from '../realtime/wakeWordMatch.js';
+import { PhraseDecision, spottingGrammar, spottingRule, type HeardWord } from '../realtime/wakeSpotting.js';
 import { squeakrHome, voskPaths } from '../serve/voskPaths.js';
 
 const log = childLogger('channels:wake-spotter');
@@ -29,25 +31,6 @@ const execFileAsync = promisify(execFile);
 /** Vosk models are trained at 16 kHz — the rate calls already deliver (channels/audio.ts). */
 export const SPOTTER_SAMPLE_RATE = 16_000;
 
-/**
- * Partial results carry no word confidence; below this threshold they may
- * trigger, above it only a confident final result does. The PWA's
- * WAKE_PARTIAL_MATCH_THRESHOLD — keep the two equal.
- */
-export const WAKE_PARTIAL_MATCH_THRESHOLD = 0.55;
-
-/** The grammar for one phrase: the phrase, and everything else as `[unk]`. */
-export function spotterGrammar(phrase: string): string[] {
-  return [normalizeForWakeMatch(phrase), '[unk]'];
-}
-
-/** Vosk heard the whole phrase — on its own or ending what it heard (web: voskPhraseMatches). */
-export function phraseHeard(heard: string, phrase: string): boolean {
-  const h = normalizeForWakeMatch(heard);
-  const p = normalizeForWakeMatch(phrase);
-  if (!p || !h) return false;
-  return h === p || h.endsWith(` ${p}`);
-}
 
 export interface PhraseSpotter {
   /** 16 kHz mono PCM16. */
@@ -83,34 +66,35 @@ interface VoskModule {
 
 class VoskPhraseSpotter implements PhraseSpotter {
   private readonly rec: VoskRecognizer;
-  private readonly matchPartial: boolean;
-  private readonly minConfidence: number;
+  private readonly decision: PhraseDecision;
+  /** Audio fed since the last reset, in ms — what a partial match must hold for. */
+  private fedMs = 0;
   private triggered = false;
   private closed = false;
 
   constructor(vosk: VoskModule, model: object, private readonly opts: SpotterOptions) {
-    this.minConfidence = Math.min(1, Math.max(0, opts.threshold));
-    this.matchPartial = this.minConfidence < WAKE_PARTIAL_MATCH_THRESHOLD;
-    this.rec = new vosk.Recognizer({ model, sampleRate: SPOTTER_SAMPLE_RATE, grammar: spotterGrammar(opts.phrase) });
+    this.decision = new PhraseDecision(opts.phrase, spottingRule('start', opts.threshold));
+    this.rec = new vosk.Recognizer({ model, sampleRate: SPOTTER_SAMPLE_RATE, grammar: spottingGrammar(opts.phrase) });
     this.rec.setWords(true);
   }
 
   push(pcm: Buffer): void {
     if (this.closed || this.triggered) return;
+    this.fedMs += (pcm.length / 2 / SPOTTER_SAMPLE_RATE) * 1000;
     if (this.rec.acceptWaveform(pcm)) {
       const final = parseFinal(this.rec.resultString());
-      if (!final || !phraseHeard(final.text, this.opts.phrase)) return;
-      if (this.minConfidence > 0 && (final.confidence === null || final.confidence < this.minConfidence)) return;
-      this.fire(final.text);
-    } else if (this.matchPartial) {
+      if (final && this.decision.final(final.words)) this.fire(final.text);
+    } else {
       const partial = this.rec.partialResult().partial;
-      if (phraseHeard(partial, this.opts.phrase)) this.fire(partial);
+      if (this.decision.partial(partial, this.fedMs)) this.fire(partial);
     }
   }
 
   reset(): void {
     if (this.closed) return;
     this.rec.reset();
+    this.decision.reset();
+    this.fedMs = 0;
     this.triggered = false;
   }
 
@@ -126,14 +110,15 @@ class VoskPhraseSpotter implements PhraseSpotter {
   }
 }
 
-/** A final Vosk result: its text and mean word confidence (null without words). */
-export function parseFinal(json: string | null): { text: string; confidence: number | null } | null {
+/** A final Vosk result: its text and its words with their confidence. */
+export function parseFinal(json: string | null): { text: string; words: HeardWord[] } | null {
   if (!json) return null;
   try {
-    const r = JSON.parse(json) as { text?: string; result?: Array<{ conf?: number }> };
-    const words = (r.result ?? []).filter((w) => typeof w.conf === 'number');
-    const confidence = words.length ? words.reduce((n, w) => n + w.conf!, 0) / words.length : null;
-    return { text: r.text ?? '', confidence };
+    const r = JSON.parse(json) as { text?: string; result?: Array<{ word?: string; conf?: number }> };
+    const words = (r.result ?? [])
+      .filter((w) => typeof w.word === 'string' && typeof w.conf === 'number')
+      .map((w) => ({ word: w.word!, conf: w.conf! }));
+    return { text: r.text ?? '', words };
   } catch {
     return null;
   }

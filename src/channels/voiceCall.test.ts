@@ -375,13 +375,24 @@ describe('VoiceCall — like the phone', () => {
   });
 
   it('a spotted phrase the transcript misspelled is still cut from the request', async () => {
-    const h = rich(true, fakeSpotter().factory, 'Hey squeaking, run the tests.');
+    const h = rich(true, fakeSpotter().factory, 'Hay squeaker, run the tests.');
     h.call.start();
     await flush(20);
     h.call.pushAudio('u1', 'Ana', speech(600));
     h.call.speakerPaused('u1');
     await flush(50);
     assert.deepEqual(h.delivered, ['run the tests']);
+    await h.call.close();
+  });
+
+  it('a look-alike the spotter fell for is not delivered', async () => {
+    const h = rich(true, fakeSpotter().factory, 'He squeezed the lemon into the tea.');
+    h.call.start();
+    await flush(20);
+    h.call.pushAudio('u1', 'Ana', speech(600));
+    h.call.speakerPaused('u1');
+    await flush(50);
+    assert.deepEqual(h.delivered, []);
     await h.call.close();
   });
 

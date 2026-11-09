@@ -3,7 +3,8 @@
  *
  * In: `@discordjs/voice` hands each speaking member's audio as Opus packets
  * (decrypted, DAVE included). Each packet is decoded to 48 kHz stereo,
- * downmixed and resampled to the 16 kHz mono the speech pipeline takes.
+ * downmixed, partly denoised (../denoise.ts — one suppressor per member for
+ * the whole call) and resampled to the 16 kHz mono the speech pipeline takes.
  * Discord sends nothing while someone is silent, so the end of a member's
  * audio stream (after `segmentSilenceMs` of quiet) is what cuts their segment.
  *
@@ -21,6 +22,7 @@ import type { AudioPlayer, VoiceConnection } from '@discordjs/voice';
 import { childLogger } from '../../log.js';
 import type { PcmStream } from '../../providers/speech/output/types.js';
 import { downmixPcm16, monoToStereoPcm16, OpusDecoder, OPUS_RATE, resamplePcm16 } from '../audio.js';
+import { loadDenoiser, type CallDenoiser, type DenoiserFactory } from '../denoise.js';
 import { VoiceCall } from '../voiceCall.js';
 
 const log = childLogger('channels:discord-voice');
@@ -44,6 +46,8 @@ export interface DiscordCallOptions {
   /** Tests: the call's speech/agent dependencies and the end-of-speech silence. */
   callDeps?: ConstructorParameters<typeof VoiceCall>[0]['deps'];
   silenceMs?: number;
+  /** Tests: the noise suppressor (default: RNNoise when installed). */
+  denoiser?: () => Promise<DenoiserFactory | null>;
 }
 
 export class DiscordCall {
@@ -51,6 +55,9 @@ export class DiscordCall {
   private connection: VoiceConnection | null = null;
   private player: AudioPlayer | null = null;
   private readonly listening = new Set<string>();
+  private denoiserFactory: DenoiserFactory | null = null;
+  /** Per member, for the whole call: RNNoise learns each speaker's room as it goes. */
+  private readonly denoisers = new Map<string, CallDenoiser>();
   private ended = false;
 
   constructor(private readonly opts: DiscordCallOptions) {
@@ -82,6 +89,9 @@ export class DiscordCall {
       debug: true,
     });
     this.connection = connection;
+    void (this.opts.denoiser ?? loadDenoiser)().then((factory) => {
+      this.denoiserFactory = factory;
+    });
     // End-to-end encryption (DAVE) is where calls go quiet without an error — keep its trail.
     connection.on('debug', (message: string) => {
       if (message.includes('[DAVE]')) log.debug({ message: message.slice(0, 300) }, 'voice encryption');
@@ -130,6 +140,8 @@ export class DiscordCall {
   async leave(reason?: string): Promise<void> {
     if (this.ended) return;
     this.ended = true;
+    for (const d of this.denoisers.values()) d.close();
+    this.denoisers.clear();
     await this.call.close();
     this.player?.stop(true);
     try {
@@ -154,8 +166,8 @@ export class DiscordCall {
     this.listening.add(userId);
     stream.on('data', (packet: Buffer) => {
       try {
-        const stereo48 = decoder.decode(packet);
-        this.call.pushAudio(userId, name, resamplePcm16(downmixPcm16(stereo48, 2), OPUS_RATE, 16_000));
+        const mono48 = this.denoise(userId, downmixPcm16(decoder.decode(packet), 2));
+        this.call.pushAudio(userId, name, resamplePcm16(mono48, OPUS_RATE, 16_000));
       } catch (err) {
         log.debug({ err, userId }, 'dropped an undecodable opus packet');
       }
@@ -171,6 +183,13 @@ export class DiscordCall {
       log.warn({ err, userId }, 'discord receive stream failed');
       done();
     });
+  }
+
+  private denoise(userId: string, mono48: Buffer): Buffer {
+    if (!this.denoiserFactory) return mono48;
+    let d = this.denoisers.get(userId);
+    if (!d) this.denoisers.set(userId, (d = this.denoiserFactory()));
+    return d.process(mono48);
   }
 
   private async play(pcm: PcmStream, signal: AbortSignal): Promise<void> {
