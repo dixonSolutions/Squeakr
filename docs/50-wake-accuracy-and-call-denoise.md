@@ -94,8 +94,79 @@ runs on each Discord member's 48 kHz audio before the resample to 16 kHz.
 - **The original is delayed by 960 samples (20 ms)** to line up with RNNoise's
   output. Unaligned, the two comb-filter.
 - **Cost:** about 0.45 ms of CPU per 10 ms frame per speaking member.
-- **Not on the phone.** The browser's own noise suppression (`audio.ts`)
-  already runs there, and adding RNNoise on top would clean the audio twice.
+
+### The main interface (PWA) — `web/src/rnnoise-dsp.ts`
+
+The browser could not use the bridge's per-speaker call denoiser: the wake
+phrase is spotted by Vosk in the page, so the audio has to be cleaned before
+the spotter sees it. The PWA now runs the same RNNoise build and the same
+40 % mix, with the same 20 ms alignment, as a stream:
+
+- **One suppressor per microphone, for the whole session.** Wake, submit and
+  cancel spotters plus server STT and the direct audio stream share one
+  denoised `MediaStream` (`web/src/mic-denoise.ts`). RNNoise learns the room
+  as it goes; one per utterance would restart that learning every turn.
+- **It emits exactly what it takes in.** The 20 ms the cleaned signal lags by
+  is real delay, not a shorter buffer, so a microphone graph cannot drift.
+  The callback path preallocates every buffer and re-reads `HEAPF32` after a
+  frame, because a grown WASM memory replaces the view.
+- **Always on, then the next wake.** The denoised stream lives across the
+  session's wake → capture → submit → re-arm loop, so the phrase after a turn
+  is heard by a suppressor that already knows the noise.
+- **Fails open.** The module is an optional dependency copied verbatim (its
+  WASM is inline). If it is missing, the context never runs at 48 kHz, or a
+  callback throws, the raw microphone passes through and wake words keep
+  working.
+- **Browser suppression stays on.** This is a 40 % mix, not a replacement, so
+  the two do not fight; WebKit STT cannot accept a processed stream and
+  still needs the browser's own filter.
+
+`npm run stress:denoise` runs the committed corpus and synthetic noise
+through the shipped PWA code, measures real-time factor and noise reduction,
+then processes a long stream to catch drift. It prints a table and writes
+`web-denoise-stress.json` under the bench output directory.
+
+On this machine the shipped PWA code (the same WASM, one main-thread
+callback) did 258 s of corpus + noise in 10.5 s — a worst case of 4.6 % of
+one core, 21.5× real time — with no non-finite samples and no drift. Steady
+noise dropped 3.2–4.4 dB (the 40 % mix); a tonal siren only 1.6 dB, as on
+calls. A 60 s blanket-noise run stayed drift-free. In Chromium the graph
+loaded in about 28 ms and produced a finite 48 kHz track.
+
+### Virtual microphone — the whole PWA path
+
+`npm run test:e2e:wake-denoise` drives the production build in Chromium with
+**no physical microphone**: Chrome's fake capture device plays a WAV built from
+the committed corpus and the bench's synthetic noises. Each file has three
+wake → command → "cursor send" rounds, so a pass means the app woke, took the
+request, submitted it and re-armed for the next phrase. The denoise-off run
+blocks the RNNoise asset, which is exactly the pre-change path.
+
+The matrix covers clean audio, fan/vacuum/music/babble/blanket noise at
++10, 0 and −5 dB, −18 dB quiet, +12 dB loud, tanh soft distortion, hard
+clipping, a 5-bit crush and a 300–3400 Hz telephone band. Pass
+`--results wake-denoise-results.json` to keep the per-case JSON:
+
+| | Denoise on | Denoise off |
+|---|---|---|
+| Wakes, 15 positive cases × 3 rounds | 57.8 % | 55.6 % |
+| Clean | 100 % | 100 % |
+| Music at 0 dB | 100 % | 100 % |
+| Fan at 0 dB | 66 % | 66 % |
+| Vacuum at 0 dB | 66 % wake, weak submit | 66 % wake, weak submit |
+| False wakes, noise/talk only | 0 | 0 |
+
+Two cases are beyond the bench's harsh set and got 0/3 in both modes: four
+people talking at 0 dB, and blanket noise at −5 dB with hard clipping. That is
+the point at which the phrase is no longer separable, and the strongest fix is
+a more distinctive phrase, not more filtering (see the limits below). With the
+default Silero VAD instead of the forced end phrase, fan at 0 dB reached 3/3
+wakes and turns.
+
+Turning the browser's own `noiseSuppression` off (RNNoise alone) was worse on
+the same harsh subset — 50 % against 55.6 % — so the shipped combination
+stays: browser DSP for the WebKit-STT path, plus the 40 % RNNoise stream for
+wake words, server STT and the direct audio stream.
 
 ## The bench
 

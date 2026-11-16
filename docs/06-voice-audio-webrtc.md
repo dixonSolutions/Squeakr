@@ -218,6 +218,9 @@ Limits, battery notes, and user guidance: [`19-mobile-session-keepalive.md`](./1
 ## Audio processing
 
 `web/src/audio.ts` — mic capture, echo cancellation, noise gate.
+`web/src/mic-denoise.ts` — RNNoise on the PWA microphone (docs/50), one
+denoised stream shared by wake words, server STT and the direct audio stream.
+`web/src/rnnoise-dsp.ts` — the RNNoise stream itself (40 % mix, 20 ms aligned).
 `web/src/silero-vad.ts` — speech-end detection.
 `web/src/voice-audio-meter.ts` — orb visualization levels.
 `web/src/model-download.ts` — offline model prefetch + progress reporting.

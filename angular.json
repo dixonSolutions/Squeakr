@@ -44,6 +44,11 @@
                 "glob": "ort-wasm-simd-threaded.mjs",
                 "input": "node_modules/onnxruntime-web/dist",
                 "output": "silero-vad"
+              },
+              {
+                "glob": "rnnoise-sync.js",
+                "input": "node_modules/@jitsi/rnnoise-wasm/dist",
+                "output": "rnnoise"
               }
             ],
             "styles": [

@@ -61,6 +61,7 @@ import {
 } from './vosk-wake-word.js';
 import { DEFAULT_REDEMPTION_MS, SileroVadDetector } from './silero-vad.js';
 import { prefetchVoiceModels } from './model-download.js';
+import { preloadDenoiser, startMicDenoise, stopMicDenoise } from './mic-denoise.js';
 import { TurnSubmitBuffer } from './turn-submit-buffer.js';
 import { playVoiceCueNow } from './sound-effects.js';
 import { errorSpeechText } from './error-feedback.js';
@@ -197,6 +198,9 @@ export class LlmIntelligenceSession {
   private wakeWordsEnabled = true;
   private lastLoggedSttPartial = '';
   private sharedMicStream: MediaStream | null = null;
+  /** RNNoise-cleaned microphone shared by wake words, STT and the stream pipe. */
+  private denoisedMicStream: MediaStream | null = null;
+  private denoiseTried = false;
   /** Borrowed from MicService; released, not stopped, when the session ends. */
   private micLease: MicLease | null = null;
   private lastErrorFeedbackMessage = '';
@@ -402,6 +406,9 @@ export class LlmIntelligenceSession {
       ttsDetail,
     );
     this.wsConnected = true;
+    // Load RNNoise while the models are still coming up, so the first wake
+    // phrase does not wait on it.
+    void preloadDenoiser();
 
     if (this.inputMode === 'stream' && !this.audioConfig.sttAvailable) {
       // Browser STT cannot transcribe a raw stream — the bridge has to.
@@ -458,6 +465,9 @@ export class LlmIntelligenceSession {
     this.meterMicChain = null;
     this.micTracks.clear();
     this.micMuted = false;
+    if (this.sharedMicStream) stopMicDenoise(this.sharedMicStream);
+    this.denoisedMicStream = null;
+    this.denoiseTried = false;
     if (this.ownsSharedMic) {
       // Release the lease, not the device. MicService mutes immediately and
       // only stops the tracks after the keep-warm window, so the next session
@@ -516,6 +526,29 @@ export class LlmIntelligenceSession {
     this.ownsSharedMic = true;
     this.registerMicStream(this.sharedMicStream);
     return this.sharedMicStream;
+  }
+
+  /**
+   * The microphone speech recognition should hear: RNNoise-denoised when the
+   * suppressor loaded, the shared raw stream otherwise. Built once per session
+   * and shared, so wake words and the request are cleaned by one suppressor
+   * that has learned the room instead of a fresh one every turn.
+   */
+  private async voiceInput(): Promise<MediaStream> {
+    const mic = this.sharedMicStream ?? (await this.ensureSharedMic());
+    if (!this.denoiseTried) {
+      this.denoiseTried = true;
+      try {
+        this.denoisedMicStream = await startMicDenoise(mic);
+        if (this.denoisedMicStream) {
+          this.voiceLog('pipeline', 'info', 'Microphone noise cancellation on', 'RNNoise 40% mix');
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.voiceLog('pipeline', 'warn', 'Microphone noise cancellation unavailable', message);
+      }
+    }
+    return this.denoisedMicStream ?? mic;
   }
 
   private async attachMicMeter(stream?: MediaStream): Promise<void> {
@@ -578,7 +611,7 @@ export class LlmIntelligenceSession {
       },
     });
     try {
-      await pipe.start(mic);
+      await pipe.start(await this.voiceInput());
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       pipe.stop();
@@ -666,7 +699,7 @@ export class LlmIntelligenceSession {
           this.cb.onSttError?.(`Wake phrase spotter: ${message}`);
         },
       });
-      const mic = this.sharedMicStream ?? (await this.ensureSharedMic());
+      const mic = await this.voiceInput();
       await this.startSpotter.start(start, {
         mediaStream: mic,
         ...wakeSpotterOptions(resolveWakeConfidenceThreshold(this.wakeWords)),
@@ -800,7 +833,7 @@ export class LlmIntelligenceSession {
         onMatch: () => this.onCancelDetected(),
         onError: (message) => console.warn('[vosk-cancel]', message),
       });
-      const mic = this.sharedMicStream ?? (await this.ensureSharedMic());
+      const mic = await this.voiceInput();
       await this.cancelSpotter.start(cancel, { mediaStream: mic, matchPartial: false });
     } catch (err) {
       console.warn('[vosk-cancel]', err);
@@ -947,7 +980,7 @@ export class LlmIntelligenceSession {
     if (!this.voiceActivated || this.closed) return;
     await this.ensureSttPipeline();
     if (this.stt instanceof ServerSttSession) {
-      await this.stt.start(this.sharedMicStream ?? undefined);
+      await this.stt.start(await this.voiceInput());
     }
     this.capturingUtterance = true;
     this.lastLoggedSttPartial = '';
@@ -1045,7 +1078,7 @@ export class LlmIntelligenceSession {
     });
 
     try {
-      const mic = this.sharedMicStream ?? (await this.ensureSharedMic());
+      const mic = await this.voiceInput();
       const voskMic = cloneMicForVosk(mic);
       await this.endSpotter.start(end, {
         mediaStream: voskMic,
